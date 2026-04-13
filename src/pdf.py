@@ -11,18 +11,10 @@ from pathlib import Path
 from typing import List, Optional
 
 try:
-    from pypdf import PdfMerger
+    from pypdf import PdfWriter, PdfReader
     PYPDF_AVAILABLE = True
 except ImportError:
-    try:
-        from PyPDF3 import PdfMerger
-        PYPDF_AVAILABLE = True
-    except ImportError:
-        try:
-            from pypdf2 import PdfMerger
-            PYPDF_AVAILABLE = True
-        except ImportError:
-            PYPDF_AVAILABLE = False
+    PYPDF_AVAILABLE = False
 
 
 class DocxToPdfConverter:
@@ -195,76 +187,62 @@ class DocxToPdfConverter:
             print("에러: pypdf 가 설치되어 있지 않습니다.")
             print("pip install pypdf")
             return False
-        
-        merger = PdfMerger()
-        
+
+        writer = PdfWriter()
+
         try:
             for i, pdf_file in enumerate(pdf_files, 1):
                 print(f"[{i}/{len(pdf_files)}] 추가 중: {Path(pdf_file).name}")
-                merger.append(pdf_file)
-            
+                reader = PdfReader(str(pdf_file))
+                for page in reader.pages:
+                    writer.add_page(page)
+
             with open(output_path, 'wb') as f:
-                merger.write(f)
-            
-            print(f"✓ PDF 병합 완료: {output_path.name}")
-            
-            # 파일 정보 출력
+                writer.write(f)
+
             file_size = output_path.stat().st_size
-            print(f"  - 크기: {file_size / 1024:.1f} KB")
-            
+            print(f"✓ PDF 병합 완료: {output_path.name}  ({file_size / 1024:.1f} KB)")
             return True
-            
+
         except Exception as e:
             print(f"에러: PDF 병합 실패 - {e}")
             return False
-        finally:
-            merger.close()
-    
+
     def merge_only(self, pdf_files: List[Path], output_path: Path) -> bool:
-        """
-        이미 존재하는 PDF 파일들만 병합합니다.
-        
-        Args:
-            pdf_files: 병합할 PDF 파일 목록
-            output_path: 출력 파일 경로
-        
-        Returns:
-            성공 여부
-        """
+        """이미 존재하는 PDF 파일들만 병합합니다."""
         if not PYPDF_AVAILABLE:
             print("에러: pypdf 가 설치되어 있지 않습니다.")
             return False
-        
+
         if not pdf_files:
             print("에러: 병합할 PDF 파일이 없습니다.")
             return False
-        
+
         output_path = Path(output_path).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        merger = PdfMerger()
-        
+
+        writer = PdfWriter()
+
         try:
             for i, pdf_file in enumerate(pdf_files, 1):
                 pdf_file = Path(pdf_file).resolve()
                 if not pdf_file.exists():
                     print(f"경고: 파일이 없음 - {pdf_file.name}")
                     continue
-                
                 print(f"[{i}/{len(pdf_files)}] 추가 중: {pdf_file.name}")
-                merger.append(str(pdf_file))
-            
+                reader = PdfReader(str(pdf_file))
+                for page in reader.pages:
+                    writer.add_page(page)
+
             with open(output_path, 'wb') as f:
-                merger.write(f)
-            
+                writer.write(f)
+
             print(f"✓ PDF 병합 완료: {output_path.name}")
             return True
-            
+
         except Exception as e:
             print(f"에러: PDF 병합 실패 - {e}")
             return False
-        finally:
-            merger.close()
 
 
 # ============================================================================
