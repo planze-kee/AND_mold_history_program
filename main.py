@@ -1,4 +1,4 @@
-"""
+﻿"""
 금형이력카드 처리 프로그램 - PyQt GUI
 """
 import sys
@@ -40,12 +40,12 @@ class NewCardDialog(QDialog):
 
     def __init__(self, parent=None, xlsx_path=None):
         super().__init__(parent)
-        self.xlsx_path = Path(xlsx_path) if xlsx_path else None
+        self._init_xlsx_path = str(xlsx_path) if xlsx_path else "data/output/00.DB_19-000.xlsx"
         self._auto_file_name = ""
         self.result_data = None
         self._image_path: Optional[Path] = None
         self.setWindowTitle("신규 이력카드 발행")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(480)
         self._build_ui()
         self._calc_next_file_name()
 
@@ -53,6 +53,19 @@ class NewCardDialog(QDialog):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(12, 12, 12, 12)
+
+        # DB 엑셀 파일 선택
+        xlsx_group = QGroupBox("DB 엑셀 파일")
+        xlsx_row = QHBoxLayout()
+        self.dlg_xlsx_edit = QLineEdit(self._init_xlsx_path)
+        self.dlg_xlsx_edit.textChanged.connect(self._calc_next_file_name)
+        xlsx_browse_btn = QPushButton("찾기...")
+        xlsx_browse_btn.setMaximumWidth(55)
+        xlsx_browse_btn.clicked.connect(self._browse_xlsx)
+        xlsx_row.addWidget(self.dlg_xlsx_edit, 1)
+        xlsx_row.addWidget(xlsx_browse_btn)
+        xlsx_group.setLayout(xlsx_row)
+        main_layout.addWidget(xlsx_group)
 
         fn_row = QHBoxLayout()
         fn_row.addWidget(QLabel("File name (자동생성):"))
@@ -78,7 +91,7 @@ class NewCardDialog(QDialog):
         opt_form = QFormLayout()
         opt_form.setSpacing(6)
         optional = [
-            ("保管会社名", "보관회사명"), ("作成日子", "작성일자"),
+            ("保管会社名", "보관회사명"), ("作成日子", "작성일자"), ("承認日", "승인일"),
             ("分 類", "분류"), ("製作処", "제작처"),
             ("MODEL 명", "MODEL 명"), ("量産処", "양산처"),
             ("金型規格", "금형규격"), ("CAVITY 数", "CAVITY 수"),
@@ -90,13 +103,31 @@ class NewCardDialog(QDialog):
             self.fields[key] = edit
             opt_form.addRow(f"{label}:", edit)
 
+        # 체크박스: 이중언어 라벨(위) + 체크박스(아래) 세로 배치
         check_layout = QHBoxLayout()
         self.checkboxes = {}
-        for key, display in [("新作", "新作"), ("増作", "増作"), ("二元化", "二元化"),
-                              ("業者変更", "業者更変"), ("仕様変更", "機種更変")]:
-            cb = QCheckBox(display)
+        checkbox_items = [
+            ("新作",    "新作\n신규제작"),
+            ("増作",    "増作\n증작"),
+            ("二元化",  "二元化\n이원화"),
+            ("業者変更","業者更変\n업체변경"),
+            ("仕様変更","機種更変\n기종변경"),
+        ]
+        for key, display in checkbox_items:
+            vbox = QVBoxLayout()
+            vbox.setAlignment(Qt.AlignHCenter)
+            lbl = QLabel(display)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet("font-size: 12px;")
+            cb = QCheckBox()
+            cb_row = QHBoxLayout()
+            cb_row.addStretch()
+            cb_row.addWidget(cb)
+            cb_row.addStretch()
+            vbox.addWidget(lbl)
+            vbox.addLayout(cb_row)
             self.checkboxes[key] = cb
-            check_layout.addWidget(cb)
+            check_layout.addLayout(vbox)
         check_layout.addStretch()
 
         img_row = QHBoxLayout()
@@ -132,10 +163,17 @@ class NewCardDialog(QDialog):
 
         self.setLayout(main_layout)
 
+    def _browse_xlsx(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "DB 엑셀 파일 선택", ".", "Excel 파일 (*.xlsx *.xls)")
+        if path:
+            self.dlg_xlsx_edit.setText(path)
+
     def _calc_next_file_name(self):
-        if self.xlsx_path and self.xlsx_path.exists():
+        xlsx_path = Path(self.dlg_xlsx_edit.text())
+        if xlsx_path.exists():
             try:
-                self._auto_file_name = NewCardManager.get_next_file_name(self.xlsx_path)
+                self._auto_file_name = NewCardManager.get_next_file_name(xlsx_path)
                 self.file_name_label.setText(self._auto_file_name)
             except Exception:
                 self.file_name_label.setText("오류 (수동 입력 필요)")
@@ -793,10 +831,8 @@ class MainWindow(QMainWindow):
     # 신규 이력카드 발행
     # -----------------------------------------------------------------------
     def show_new_card_dialog(self):
-        xlsx_path = Path(self.docx_xlsx_edit.text())
-        dlg = NewCardDialog(
-            self,
-            xlsx_path=str(xlsx_path) if xlsx_path.exists() else None)
+        init_xlsx = self.docx_xlsx_edit.text() if hasattr(self, 'docx_xlsx_edit') else ""
+        dlg = NewCardDialog(self, xlsx_path=init_xlsx if init_xlsx else None)
         if dlg.exec_() != QDialog.Accepted:
             return
         row_data = dlg.get_data()
@@ -804,15 +840,16 @@ class MainWindow(QMainWindow):
         if not row_data:
             return
 
+        xlsx_path = Path(dlg.dlg_xlsx_edit.text())
         template_path = Path(self.docx_template_edit.text())
         output_dir = Path(self.docx_output_edit.text())
         img_dir = Path(self.docx_img_edit.text())
 
         if not xlsx_path.exists():
-            self.show_error("3단계 탭에서 엑셀 파일을 먼저 설정하세요.")
+            self.show_error("신규 발행 다이얼로그에서 DB 엑셀 파일을 올바르게 설정하세요.")
             return
         if not template_path.exists():
-            self.show_error("3단계 탭에서 템플릿 파일을 먼저 설정하세요.")
+            self.show_error("문서 생성/동기화 탭에서 템플릿 파일을 먼저 설정하세요.")
             return
 
         self.disable_buttons()
