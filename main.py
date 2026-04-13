@@ -212,11 +212,11 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(top_layout)
 
         tabs = QTabWidget()
-        tabs.addTab(self.create_hwp_tab(), "1단계: HWP 처리")
-        tabs.addTab(self.create_image_tab(), "2단계: 이미지 추출")
-        tabs.addTab(self.create_docx_tab(), "3단계: 문서 생성/동기화")
-        tabs.addTab(self.create_history_tab(), "4단계: 이력 관리")
-        tabs.addTab(self.create_pdf_tab(), "5단계: PDF 변환/병합")
+        tabs.addTab(self.create_docx_tab(), "문서 생성/동기화")
+        tabs.addTab(self.create_history_tab(), "이력 관리")
+        tabs.addTab(self.create_pdf_tab(), "PDF 변환/병합")
+        tabs.addTab(self.create_hwp_tab(), "HWP 처리")
+        tabs.addTab(self.create_image_tab(), "이미지 추출")
         main_layout.addWidget(tabs)
 
         log_label = QLabel("작업 로그:")
@@ -245,7 +245,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
 
         title_layout = QHBoxLayout()
-        title_label = QLabel("1단계: HWP → XLSX 변환")
+        title_label = QLabel("HWP → XLSX 변환")
         title_label.setFont(QFont("Arial", 11, QFont.Bold))
         title_layout.addWidget(title_label)
         help_btn = QPushButton("?")
@@ -295,7 +295,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
 
         title_layout = QHBoxLayout()
-        title_label = QLabel("2단계: 이미지 추출")
+        title_label = QLabel("이미지 추출")
         title_label.setFont(QFont("Arial", 11, QFont.Bold))
         title_layout.addWidget(title_label)
         help_btn = QPushButton("?")
@@ -344,7 +344,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
 
         title_layout = QHBoxLayout()
-        title_label = QLabel("3단계: 워드 문서 생성 / 동기화")
+        title_label = QLabel("워드 문서 생성 / 동기화")
         title_label.setFont(QFont("Arial", 11, QFont.Bold))
         title_layout.addWidget(title_label)
         help_btn = QPushButton("?")
@@ -437,7 +437,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
 
         title_layout = QHBoxLayout()
-        title_label = QLabel("4단계: 유지보수 이력 관리")
+        title_label = QLabel("유지보수 이력 관리")
         title_label.setFont(QFont("Arial", 11, QFont.Bold))
         title_layout.addWidget(title_label)
         help_btn = QPushButton("?")
@@ -445,6 +445,46 @@ class MainWindow(QMainWindow):
         help_btn.clicked.connect(self.show_history_help)
         title_layout.addWidget(help_btn)
         layout.addLayout(title_layout)
+
+        # DB / 파일 설정 그룹
+        file_group = QGroupBox("파일 설정")
+        fg = QVBoxLayout()
+        fg.setSpacing(4)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("DB 엑셀 파일:"))
+        self.hist_xlsx_edit = QLineEdit("data/output/00.DB_19-000.xlsx")
+        hbox.addWidget(self.hist_xlsx_edit)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_file(
+            self.hist_xlsx_edit, "Excel Files (*.xlsx)"))
+        hbox.addWidget(btn)
+        fg.addLayout(hbox)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("템플릿 파일:"))
+        self.hist_template_edit = QLineEdit("data/templates/11-000_양식.docx")
+        hbox.addWidget(self.hist_template_edit)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_file(
+            self.hist_template_edit, "Word Files (*.docx)"))
+        hbox.addWidget(btn)
+        fg.addLayout(hbox)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("이미지 폴더:"))
+        self.hist_img_edit = QLineEdit("img")
+        hbox.addWidget(self.hist_img_edit)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_folder(self.hist_img_edit))
+        hbox.addWidget(btn)
+        fg.addLayout(hbox)
+
+        file_group.setLayout(fg)
+        layout.addWidget(file_group)
 
         # 출력 폴더 선택
         folder_row = QHBoxLayout()
@@ -705,14 +745,14 @@ class MainWindow(QMainWindow):
         MaintenanceHistoryManager.write_history(docx_path, content)
         self.log_message(f"✓ 이력 저장됨: {docx_path.stem}_history.txt")
 
-        xlsx_path = Path(self.docx_xlsx_edit.text())
+        xlsx_path = Path(self.hist_xlsx_edit.text())
         if xlsx_path.exists():
             MaintenanceHistoryManager.update_xlsx_reason(
                 docx_path, xlsx_path, content,
                 callback=lambda msg: self.log_message(msg))
         else:
             self.log_message(
-                "  (XLSX 경로 미설정 — 3단계 탭에서 엑셀 파일을 지정하면 DB도 함께 갱신됩니다)")
+                "  (XLSX 미설정 — 위 'DB 엑셀 파일' 경로를 지정하면 DB도 함께 갱신됩니다)")
 
     def apply_history_to_word(self):
         """이력 내용을 Word 파일에 반영 (XLSX 업데이트 + Word 재생성)"""
@@ -721,15 +761,15 @@ class MainWindow(QMainWindow):
             return
         output_dir = Path(self.hist_dir_edit.text())
         docx_path = output_dir / current.text()
-        xlsx_path = Path(self.docx_xlsx_edit.text())
-        template_path = Path(self.docx_template_edit.text())
-        img_dir = Path(self.docx_img_edit.text())
+        xlsx_path = Path(self.hist_xlsx_edit.text())
+        template_path = Path(self.hist_template_edit.text())
+        img_dir = Path(self.hist_img_edit.text())
 
         if not xlsx_path.exists():
-            self.show_error("3단계 탭에서 엑셀 파일을 먼저 설정하세요.")
+            self.show_error("이력 관리 탭의 'DB 엑셀 파일'을 먼저 설정하세요.")
             return
         if not template_path.exists():
-            self.show_error("3단계 탭에서 템플릿 파일을 먼저 설정하세요.")
+            self.show_error("이력 관리 탭의 '템플릿 파일'을 먼저 설정하세요.")
             return
 
         self.disable_buttons()
