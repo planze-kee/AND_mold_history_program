@@ -1,0 +1,9 @@
+# 프로그램 실행에 필요한 패키지
+PyQt5==5.15.7
+openpyxl==3.10.10
+olefile==0.46
+python-docx==0.8.11
+Pillow==9.5.0
+
+# EXE 빌드에 필요한 패키지
+PyInstaller==6.1.0

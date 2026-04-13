@@ -1,0 +1,56 @@
+# ── 빌드 산출물 ──────────────────────────────────────────────
+dist/
+build/
+*.spec.bak
+금형이력카드프로그램_배포/
+
+# ── 압축 배포본 ───────────────────────────────────────────────
+*.zip
+
+# ── 실제 데이터 (소스 HWP / 추출 이미지 / 생성된 Word·PDF) ──
+YES/
+img/
+data/output/
+data/input/
+data/output_pdf/
+
+# ── Python 캐시 ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── 가상환경 ─────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Claude Code 설정 ─────────────────────────────────────────
+.claude/
+
+# ── 기타 작업 메모 ────────────────────────────────────────────
+Memory.md
+next_move.md
+00.workflow.md
+
+# ── Qwen 작업 잔재 마크다운 ──────────────────────────────────
+SETUP_WINDOWS.md
+WORD_PDF_DEBUG.md
+install_pypdf.md
+install_pypdf_windows.md
+PDF_CONVERTER_GUIDE.md
+PDF_EXTRA_FEATURES.md
+
+# ── 잘못 생성된 경로 디렉토리 ────────────────────────────────
+C:/
+
+# ── 불필요한 예시/테스트 파일 ────────────────────────────────
+pdf_converter_example.py
+pdf_usage_example.py
+test.py
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
