@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QDialogButtonBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter
 
 from src.core import (
     HWPProcessor, HWPImageExtractor, DocumentFiller,
@@ -232,6 +232,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("금형이력카드 처리 프로그램")
+        self._set_window_icon()
         self.setGeometry(100, 100, 560, 520)
         central = QWidget()
         self.setCentralWidget(central)
@@ -240,6 +241,9 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
 
         top_layout = QHBoxLayout()
+        self.logo_label = QLabel()
+        self._set_top_logo()
+        top_layout.addWidget(self.logo_label)
         self.new_card_btn = QPushButton("★ 신규 이력카드 발행")
         self.new_card_btn.clicked.connect(self.show_new_card_dialog)
         self.new_card_btn.setStyleSheet(
@@ -272,6 +276,50 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.progress_bar)
 
         central.setLayout(main_layout)
+
+    def _logo_candidates(self):
+        return [
+            Path("c:/Users/UKY/Downloads/AND-LOGO-1.png"),
+            Path("img/AND-LOGO-1.png"),
+            Path(__file__).resolve().parent / "img" / "AND-LOGO-1.png",
+        ]
+
+    def _set_top_logo(self):
+        """UI 내부 좌측 상단에 로고를 크게 표시"""
+        target_h = 25
+        for logo_path in self._logo_candidates():
+            if not logo_path.exists():
+                continue
+            pixmap = QPixmap(str(logo_path))
+            if pixmap.isNull():
+                continue
+            scaled = pixmap.scaledToHeight(target_h, Qt.SmoothTransformation)
+            self.logo_label.setPixmap(scaled)
+            self.logo_label.setFixedSize(scaled.size())
+            self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            return
+        self.logo_label.setText("AND")
+        self.logo_label.setStyleSheet("font-weight: bold; color: #1976D2;")
+
+    def _set_window_icon(self):
+        """윈도우 좌측 상단 아이콘 설정 (AND 로고)"""
+        for icon_path in self._logo_candidates():
+            if icon_path.exists():
+                original = QPixmap(str(icon_path))
+                if original.isNull():
+                    continue
+                # 윈도우 아이콘은 정사각형으로 소비되므로, 투명 정사각 캔버스에
+                # 원본 비율로 중앙 배치해 찌그러짐을 방지한다.
+                side = max(original.width(), original.height())
+                canvas = QPixmap(side, side)
+                canvas.fill(Qt.transparent)
+                painter = QPainter(canvas)
+                x = (side - original.width()) // 2
+                y = (side - original.height()) // 2
+                painter.drawPixmap(x, y, original)
+                painter.end()
+                self.setWindowIcon(QIcon(canvas))
+                return
 
     # -----------------------------------------------------------------------
     # 탭 생성
