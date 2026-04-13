@@ -11,7 +11,7 @@ from typing import Optional
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QTextEdit, QTabWidget,
-    QGroupBox, QSpinBox, QMessageBox,
+    QGroupBox, QRadioButton, QButtonGroup, QSpinBox, QMessageBox,
     QProgressBar, QDialog, QCheckBox, QListWidget, QSplitter,
     QFormLayout, QDialogButtonBox
 )
@@ -216,6 +216,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.create_image_tab(), "2단계: 이미지 추출")
         tabs.addTab(self.create_docx_tab(), "3단계: 문서 생성/동기화")
         tabs.addTab(self.create_history_tab(), "4단계: 이력 관리")
+        tabs.addTab(self.create_pdf_tab(), "5단계: PDF 변환/병합")
         main_layout.addWidget(tabs)
 
         log_label = QLabel("작업 로그:")
@@ -537,6 +538,7 @@ class MainWindow(QMainWindow):
         self.docx_run_btn.setEnabled(False)
         self.sync_run_btn.setEnabled(False)
         self.new_card_btn.setEnabled(False)
+        self.pdf_run_btn.setEnabled(False)
 
     def enable_buttons(self):
         self.hwp_run_btn.setEnabled(True)
@@ -544,6 +546,7 @@ class MainWindow(QMainWindow):
         self.docx_run_btn.setEnabled(True)
         self.sync_run_btn.setEnabled(True)
         self.new_card_btn.setEnabled(True)
+        self.pdf_run_btn.setEnabled(True)
 
     def log_message(self, msg):
         self.log_text.append(msg)
@@ -846,6 +849,245 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
         """
         QMessageBox.information(self, "3단계 도움말", help_text.strip())
 
+    # -----------------------------------------------------------------------
+    # 5단계: PDF 변환/병합
+    # -----------------------------------------------------------------------
+    def create_pdf_tab(self):
+        """PDF 변환/병합 탭"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        title_layout = QHBoxLayout()
+        title_label = QLabel("5단계: Word → PDF 변환 / 병합")
+        title_label.setFont(QFont("Arial", 11, QFont.Bold))
+        title_layout.addWidget(title_label)
+        help_btn = QPushButton("?")
+        help_btn.setMaximumWidth(30)
+        help_btn.clicked.connect(self.show_pdf_help)
+        title_layout.addWidget(help_btn)
+        layout.addLayout(title_layout)
+
+        # 모드 선택
+        mode_group = QGroupBox("변환 모드")
+        mode_layout = QHBoxLayout()
+        self.pdf_mode_group = QButtonGroup(self)
+        for idx, label in enumerate(["단일 파일 변환", "일괄 변환 (폴더)", "변환 후 병합"]):
+            rb = QRadioButton(label)
+            self.pdf_mode_group.addButton(rb, idx)
+            mode_layout.addWidget(rb)
+        self.pdf_mode_group.button(0).setChecked(True)
+        self.pdf_mode_group.buttonClicked.connect(self._on_pdf_mode_changed)
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        # ── 모드 0: 단일 변환 ──────────────────────────────────
+        self.pdf_single_group = QGroupBox("단일 파일 변환")
+        sg = QVBoxLayout()
+        sg.setSpacing(5)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("Word 파일:"))
+        self.pdf_single_input = QLineEdit()
+        self.pdf_single_input.setPlaceholderText("변환할 .docx 파일 선택")
+        hbox.addWidget(self.pdf_single_input)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_file(
+            self.pdf_single_input, "Word Files (*.docx)"))
+        hbox.addWidget(btn)
+        sg.addLayout(hbox)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("출력 PDF:"))
+        self.pdf_single_output = QLineEdit()
+        self.pdf_single_output.setPlaceholderText("저장할 .pdf 경로 (비우면 원본 폴더)")
+        hbox.addWidget(self.pdf_single_output)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_save_file(
+            self.pdf_single_output, "PDF Files (*.pdf)"))
+        hbox.addWidget(btn)
+        sg.addLayout(hbox)
+
+        self.pdf_single_group.setLayout(sg)
+        layout.addWidget(self.pdf_single_group)
+
+        # ── 모드 1: 일괄 변환 ──────────────────────────────────
+        self.pdf_batch_group = QGroupBox("일괄 변환 (폴더 내 모든 .docx)")
+        bg = QVBoxLayout()
+        bg.setSpacing(5)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("입력 폴더:"))
+        self.pdf_batch_input = QLineEdit("data/output")
+        hbox.addWidget(self.pdf_batch_input)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_folder(self.pdf_batch_input))
+        hbox.addWidget(btn)
+        bg.addLayout(hbox)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("출력 폴더:"))
+        self.pdf_batch_output = QLineEdit("data/output_pdf")
+        hbox.addWidget(self.pdf_batch_output)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_folder(self.pdf_batch_output))
+        hbox.addWidget(btn)
+        bg.addLayout(hbox)
+
+        self.pdf_recursive_chk = QCheckBox("하위 폴더 포함")
+        bg.addWidget(self.pdf_recursive_chk)
+        self.pdf_batch_group.setLayout(bg)
+        layout.addWidget(self.pdf_batch_group)
+
+        # ── 모드 2: 변환 후 병합 ───────────────────────────────
+        self.pdf_merge_group = QGroupBox("Word 파일들을 PDF로 변환 후 하나로 병합")
+        mg = QVBoxLayout()
+        mg.setSpacing(5)
+
+        list_btn_row = QHBoxLayout()
+        add_btn = QPushButton("파일 추가...")
+        add_btn.clicked.connect(self._pdf_add_files)
+        list_btn_row.addWidget(add_btn)
+        remove_btn = QPushButton("선택 제거")
+        remove_btn.clicked.connect(self._pdf_remove_files)
+        list_btn_row.addWidget(remove_btn)
+        clear_btn = QPushButton("전체 지우기")
+        clear_btn.clicked.connect(lambda: self.pdf_merge_list.clear())
+        list_btn_row.addWidget(clear_btn)
+        list_btn_row.addStretch()
+        mg.addLayout(list_btn_row)
+
+        self.pdf_merge_list = QListWidget()
+        self.pdf_merge_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.pdf_merge_list.setMaximumHeight(110)
+        mg.addWidget(self.pdf_merge_list)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel("출력 PDF:"))
+        self.pdf_merge_output = QLineEdit("data/output_pdf/merged.pdf")
+        hbox.addWidget(self.pdf_merge_output)
+        btn = QPushButton("찾기...")
+        btn.setMaximumWidth(55)
+        btn.clicked.connect(lambda: self.browse_save_file(
+            self.pdf_merge_output, "PDF Files (*.pdf)"))
+        hbox.addWidget(btn)
+        mg.addLayout(hbox)
+
+        self.pdf_merge_group.setLayout(mg)
+        layout.addWidget(self.pdf_merge_group)
+
+        # 실행 버튼
+        self.pdf_run_btn = QPushButton("▶ 실행")
+        self.pdf_run_btn.clicked.connect(self.run_pdf)
+        self.pdf_run_btn.setStyleSheet(
+            "background-color: #E91E63; color: white; padding: 8px; font-weight: bold;")
+        layout.addWidget(self.pdf_run_btn)
+
+        layout.addStretch()
+        widget.setLayout(layout)
+
+        # 초기 모드 표시
+        self._on_pdf_mode_changed(None)
+        return widget
+
+    def _on_pdf_mode_changed(self, _):
+        mode = self.pdf_mode_group.checkedId()
+        self.pdf_single_group.setVisible(mode == 0)
+        self.pdf_batch_group.setVisible(mode == 1)
+        self.pdf_merge_group.setVisible(mode == 2)
+
+    def _pdf_add_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Word 파일 선택", ".", "Word Files (*.docx)")
+        for f in files:
+            self.pdf_merge_list.addItem(f)
+
+    def _pdf_remove_files(self):
+        for item in self.pdf_merge_list.selectedItems():
+            self.pdf_merge_list.takeItem(self.pdf_merge_list.row(item))
+
+    def run_pdf(self):
+        mode = self.pdf_mode_group.checkedId()
+        if mode == 0:
+            self._run_pdf_single()
+        elif mode == 1:
+            self._run_pdf_batch()
+        else:
+            self._run_pdf_merge()
+
+    def _run_pdf_single(self):
+        input_path = Path(self.pdf_single_input.text())
+        if not input_path.exists():
+            self.show_error("Word 파일이 존재하지 않습니다.")
+            return
+        output_text = self.pdf_single_output.text().strip()
+        output_path = Path(output_text) if output_text else None
+        self.disable_buttons()
+
+        def task():
+            try:
+                from src.pdf import docx_to_pdf
+                result = docx_to_pdf(input_path, output_path)
+                if result:
+                    self.signals.log.emit(f"✓ PDF 변환 완료: {Path(result).name}")
+                else:
+                    self.signals.log.emit("✗ PDF 변환 실패 (Word가 설치되어 있는지 확인)")
+            except Exception as e:
+                self.signals.log.emit(f"✗ 오류: {e}")
+            self.signals.finished.emit()
+
+        Thread(target=task, daemon=True).start()
+
+    def _run_pdf_batch(self):
+        input_dir = Path(self.pdf_batch_input.text())
+        if not input_dir.exists():
+            self.show_error("입력 폴더가 존재하지 않습니다.")
+            return
+        output_dir = Path(self.pdf_batch_output.text())
+        recursive = self.pdf_recursive_chk.isChecked()
+        self.disable_buttons()
+
+        def task():
+            try:
+                from src.pdf import batch_docx_to_pdf
+                results = batch_docx_to_pdf(input_dir, output_dir, recursive)
+                self.signals.log.emit(f"✓ 일괄 변환 완료: {len(results)}개 → {output_dir}")
+            except Exception as e:
+                self.signals.log.emit(f"✗ 오류: {e}")
+            self.signals.finished.emit()
+
+        Thread(target=task, daemon=True).start()
+
+    def _run_pdf_merge(self):
+        count = self.pdf_merge_list.count()
+        if count == 0:
+            self.show_error("'파일 추가...' 버튼으로 Word 파일을 목록에 추가하세요.")
+            return
+        output_path = Path(self.pdf_merge_output.text())
+        docx_files = [
+            Path(self.pdf_merge_list.item(i).text()) for i in range(count)
+        ]
+        self.disable_buttons()
+
+        def task():
+            try:
+                from src.pdf import convert_and_merge
+                ok = convert_and_merge(docx_files, output_path)
+                if ok:
+                    self.signals.log.emit(f"✓ 변환·병합 완료: {output_path.name}")
+                else:
+                    self.signals.log.emit("✗ 변환·병합 실패 (로그 확인)")
+            except Exception as e:
+                self.signals.log.emit(f"✗ 오류: {e}")
+            self.signals.finished.emit()
+
+        Thread(target=task, daemon=True).start()
+
     def show_history_help(self):
         help_text = """
 4단계: 유지보수 이력 관리
@@ -866,6 +1108,30 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
   (3단계 탭의 엑셀 파일/템플릿 설정이 필요합니다)
         """
         QMessageBox.information(self, "4단계 도움말", help_text.strip())
+
+
+    def show_pdf_help(self):
+        help_text = """
+5단계: Word → PDF 변환 / 병합
+
+【모드 설명】
+① 단일 파일 변환
+   Word 파일 1개를 PDF로 변환합니다.
+   출력 경로를 비워두면 원본과 같은 폴더에 저장됩니다.
+
+② 일괄 변환 (폴더)
+   지정한 폴더 내의 모든 .docx 파일을 PDF로 일괄 변환합니다.
+   '하위 폴더 포함' 체크 시 재귀적으로 처리합니다.
+
+③ 변환 후 병합
+   여러 Word 파일을 PDF로 변환한 뒤 하나의 PDF로 합칩니다.
+   목록 순서대로 병합됩니다.
+
+【사전 요구사항】
+- Windows: Microsoft Word 설치 필요 (comtypes 사용)
+- PDF 병합: pip install pypdf
+        """
+        QMessageBox.information(self, "5단계 도움말", help_text.strip())
 
 
 def main():
