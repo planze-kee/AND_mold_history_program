@@ -317,20 +317,29 @@ class HWPDataExtractor:
 
             elif text == 'GATE 型式' or text == 'GATE':
                 for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['Q'] = form_texts[j]
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break  # 다음 라벨 경계에서 중단 (빈 값이면 그냥 비워둠)
+                    if val.strip():
+                        row['Q'] = val
                         break
 
             elif text == '使用機械' or text == '機械':
                 for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['R'] = form_texts[j]
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break
+                    if val.strip():
+                        row['R'] = val
                         break
 
             elif text == '契約日':
                 for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['S'] = form_texts[j]
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break
+                    if val.strip():
+                        row['S'] = val
                         break
 
             elif text == '承認日':
