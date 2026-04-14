@@ -1,0 +1,34 @@
+# 금형이력카드 프로그램 설정
+# 이 파일을 수정하면 프로그램 재시작 시 반영됩니다.
+
+paths:
+  # 1단계: HWP → XLSX
+  hwp_input: "YES"
+  hwp_output: "data/output/output_from_hwp.xlsx"
+
+  # 2단계: 이미지 추출
+  img_input: "YES"
+  img_output: "img"
+
+  # 3단계: 문서 생성/동기화
+  docx_xlsx: "data/output/output_from_hwp.xlsx"
+  docx_template: "data/templates/Word_양식.docx"
+  docx_img: "img"
+  docx_output: "data/output"
+
+  # 4단계: 이력 관리
+  hist_xlsx: "data/output/00.DB_19-000.xlsx"
+  hist_template: "data/templates/Word_양식.docx"
+  hist_img: "img"
+  hist_dir: "data/output"
+
+  # 5단계: PDF 변환/병합
+  pdf_batch_input: "data/output"
+  pdf_batch_output: "data/output_pdf"
+  pdf_merge_output: "data/output_pdf/merged.pdf"
+
+ui:
+  window_x: 100
+  window_y: 100
+  window_width: 560
+  window_height: 520

@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
 from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter
 
+from src.config import Config
 from src.core import (
     HWPProcessor, HWPImageExtractor, DocumentFiller,
     DocxSyncManager, MaintenanceHistoryManager, NewCardManager
@@ -234,6 +235,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.config = Config()
         self._current_worker: Optional[Worker] = None  # QThread 참조 유지
         self.signals = WorkerSignals()
         self.signals.log.connect(self.log_message)
@@ -249,7 +251,11 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("금형이력카드 처리 프로그램")
         self._set_window_icon()
-        self.setGeometry(100, 100, 560, 520)
+        x = self.config.get_int("ui", "window_x", 100)
+        y = self.config.get_int("ui", "window_y", 100)
+        w = self.config.get_int("ui", "window_width", 560)
+        h = self.config.get_int("ui", "window_height", 520)
+        self.setGeometry(x, y, w, h)
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout()
@@ -362,7 +368,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("입력 폴더:"))
-        self.hwp_input_edit = QLineEdit("YES")
+        self.hwp_input_edit = QLineEdit(self.config.get("paths", "hwp_input"))
         hbox.addWidget(self.hwp_input_edit)
         btn = QPushButton("찾기...")
         btn.clicked.connect(lambda: self.browse_folder(self.hwp_input_edit))
@@ -371,7 +377,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("출력 엑셀 파일:"))
-        self.hwp_output_edit = QLineEdit("data/output/output_from_hwp.xlsx")
+        self.hwp_output_edit = QLineEdit(self.config.get("paths", "hwp_output"))
         hbox.addWidget(self.hwp_output_edit)
         btn = QPushButton("찾기...")
         btn.clicked.connect(lambda: self.browse_save_file(
@@ -412,7 +418,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("입력 폴더:"))
-        self.img_input_edit = QLineEdit("YES")
+        self.img_input_edit = QLineEdit(self.config.get("paths", "img_input"))
         hbox.addWidget(self.img_input_edit)
         btn = QPushButton("찾기...")
         btn.clicked.connect(lambda: self.browse_folder(self.img_input_edit))
@@ -421,7 +427,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("출력 폴더:"))
-        self.img_output_edit = QLineEdit("img")
+        self.img_output_edit = QLineEdit(self.config.get("paths", "img_output"))
         hbox.addWidget(self.img_output_edit)
         btn = QPushButton("찾기...")
         btn.clicked.connect(lambda: self.browse_folder(self.img_output_edit))
@@ -461,7 +467,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("엑셀 파일:"))
-        self.docx_xlsx_edit = QLineEdit("data/output/output_from_hwp.xlsx")
+        self.docx_xlsx_edit = QLineEdit(self.config.get("paths", "docx_xlsx"))
         hbox.addWidget(self.docx_xlsx_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(60)
@@ -472,7 +478,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("템플릿:"))
-        self.docx_template_edit = QLineEdit("data/templates/Word_양식.docx")
+        self.docx_template_edit = QLineEdit(self.config.get("paths", "docx_template"))
         hbox.addWidget(self.docx_template_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(60)
@@ -483,7 +489,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("이미지 폴더:"))
-        self.docx_img_edit = QLineEdit("img")
+        self.docx_img_edit = QLineEdit(self.config.get("paths", "docx_img"))
         hbox.addWidget(self.docx_img_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(60)
@@ -493,7 +499,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("출력 폴더:"))
-        self.docx_output_edit = QLineEdit("data/output")
+        self.docx_output_edit = QLineEdit(self.config.get("paths", "docx_output"))
         hbox.addWidget(self.docx_output_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(60)
@@ -555,7 +561,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("DB 엑셀 파일:"))
-        self.hist_xlsx_edit = QLineEdit("data/output/00.DB_19-000.xlsx")
+        self.hist_xlsx_edit = QLineEdit(self.config.get("paths", "hist_xlsx"))
         hbox.addWidget(self.hist_xlsx_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(55)
@@ -566,7 +572,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("템플릿 파일:"))
-        self.hist_template_edit = QLineEdit("data/templates/Word_양식.docx")
+        self.hist_template_edit = QLineEdit(self.config.get("paths", "hist_template"))
         hbox.addWidget(self.hist_template_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(55)
@@ -577,7 +583,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("이미지 폴더:"))
-        self.hist_img_edit = QLineEdit("img")
+        self.hist_img_edit = QLineEdit(self.config.get("paths", "hist_img"))
         hbox.addWidget(self.hist_img_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(55)
@@ -591,7 +597,7 @@ class MainWindow(QMainWindow):
         # 출력 폴더 선택
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("Word 파일 폴더:"))
-        self.hist_dir_edit = QLineEdit("data/output")
+        self.hist_dir_edit = QLineEdit(self.config.get("paths", "hist_dir"))
         self.hist_dir_edit.textChanged.connect(self.refresh_history_list)
         folder_row.addWidget(self.hist_dir_edit)
         browse_btn = QPushButton("찾기...")
@@ -717,6 +723,39 @@ class MainWindow(QMainWindow):
 
     def on_task_finished(self):
         self.enable_buttons()
+
+    def closeEvent(self, event):
+        """종료 시 현재 경로 설정과 창 크기를 config.yaml에 저장"""
+        geo = self.geometry()
+        self.config.set("ui", "window_x", geo.x())
+        self.config.set("ui", "window_y", geo.y())
+        self.config.set("ui", "window_width", geo.width())
+        self.config.set("ui", "window_height", geo.height())
+
+        field_map = {
+            "hwp_input":        "hwp_input_edit",
+            "hwp_output":       "hwp_output_edit",
+            "img_input":        "img_input_edit",
+            "img_output":       "img_output_edit",
+            "docx_xlsx":        "docx_xlsx_edit",
+            "docx_template":    "docx_template_edit",
+            "docx_img":         "docx_img_edit",
+            "docx_output":      "docx_output_edit",
+            "hist_xlsx":        "hist_xlsx_edit",
+            "hist_template":    "hist_template_edit",
+            "hist_img":         "hist_img_edit",
+            "hist_dir":         "hist_dir_edit",
+            "pdf_batch_input":  "pdf_batch_input",
+            "pdf_batch_output": "pdf_batch_output",
+            "pdf_merge_output": "pdf_merge_output",
+        }
+        for key, attr in field_map.items():
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                self.config.set("paths", key, widget.text())
+
+        self.config.save()
+        super().closeEvent(event)
 
     # -----------------------------------------------------------------------
     # 작업 실행
@@ -1078,7 +1117,7 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("입력 폴더:"))
-        self.pdf_batch_input = QLineEdit("data/output")
+        self.pdf_batch_input = QLineEdit(self.config.get("paths", "pdf_batch_input"))
         hbox.addWidget(self.pdf_batch_input)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(55)
@@ -1088,7 +1127,7 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("출력 폴더:"))
-        self.pdf_batch_output = QLineEdit("data/output_pdf")
+        self.pdf_batch_output = QLineEdit(self.config.get("paths", "pdf_batch_output"))
         hbox.addWidget(self.pdf_batch_output)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(55)
@@ -1126,7 +1165,7 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("출력 PDF:"))
-        self.pdf_merge_output = QLineEdit("data/output_pdf/merged.pdf")
+        self.pdf_merge_output = QLineEdit(self.config.get("paths", "pdf_merge_output"))
         hbox.addWidget(self.pdf_merge_output)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(55)

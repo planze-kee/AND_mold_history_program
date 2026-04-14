@@ -4,6 +4,7 @@ openpyxl==3.1.5
 olefile==0.46
 python-docx==0.8.11
 Pillow==12.2.0
+PyYAML==6.0.2
 
 # EXE 빌드에 필요한 패키지
 PyInstaller==6.1.0
