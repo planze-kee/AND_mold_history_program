@@ -525,7 +525,13 @@ class HWPImageExtractor:
 
                         image_index = extracted_count + 1
                         # 품명_도번 형식으로 생성 (예: VFD HOLDER_1072001450.jpg)
-                        base_filename = f"{self.product_name}_{self.drawing_no}" if self.product_name and self.drawing_no else self.file_name
+                        # 도번이 없으면 품명만으로 저장 (trailing underscore 없이)
+                        if self.product_name and self.drawing_no:
+                            base_filename = f"{self.product_name}_{self.drawing_no}"
+                        elif self.product_name:
+                            base_filename = self.product_name
+                        else:
+                            base_filename = self.file_name
                         if image_index == 1:
                             output_filename = f"{base_filename}.{final_fmt}"
                         else:
@@ -775,6 +781,19 @@ class DocumentFiller:
             except (OSError, ValueError):
                 pass
 
+        # trailing underscore/hyphen 제거 후 재시도
+        # 예: XLSX에 "MR14 CASE_"로 저장된 경우 → "MR14 CASE"로 검색
+        clean_stem = search_stem.rstrip('_- ')
+        if clean_stem and clean_stem != search_stem:
+            for ext in cls.IMAGE_EXTS:
+                try:
+                    p = img_dir / f"{clean_stem}{ext}"
+                    if p.exists():
+                        return p
+                    matches.extend(img_dir.glob(f"*{clean_stem}*{ext}"))
+                except (OSError, ValueError):
+                    pass
+
         if matches:
             # 연번이 없는 파일 우선 (예: "xxx_yyy.jpg" > "xxx_yyy_2.jpg")
             matches_no_suffix = [m for m in matches if not m.stem.endswith(('_2', '_3', '_4', '_5'))]
@@ -900,6 +919,13 @@ class DocumentFiller:
                 drawing_no = cls.value_by_aliases(nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
                 if drawing_no:
                     image_path = cls.find_image_for_output(img_dir, drawing_no)
+
+            # 2.5. 품명만으로 검색 (도번 없는 경우: XLSX에 "品名_"처럼 저장된 상황 대비)
+            if not image_path:
+                product_name = cls.value_by_aliases(nrow, ["品  名", "品 名", "product_name", "품명"])
+                if product_name:
+                    sanitized_pname = re.sub(r'[<>:"/\\|?*]', '_', product_name.strip())
+                    image_path = cls.find_image_for_output(img_dir, sanitized_pname)
 
             # 3. 도번으로도 못 찾으면 out_name(연번)으로 시도
             if not image_path:
