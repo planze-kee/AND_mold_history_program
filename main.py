@@ -1,10 +1,10 @@
 ﻿"""
 금형이력카드 처리 프로그램 - PyQt GUI
 """
+import html as _html
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
-from threading import Thread
 from typing import Optional
 
 from PyQt5.QtWidgets import (
@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QProgressBar, QDialog, QCheckBox, QListWidget, QSplitter,
     QFormLayout, QDialogButtonBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
 from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter
 
 from src.core import (
@@ -29,6 +29,17 @@ class WorkerSignals(QObject):
     error = pyqtSignal(str)
     log = pyqtSignal(str)
     progress = pyqtSignal(int)
+
+
+class Worker(QThread):
+    """백그라운드 작업 실행 QThread - Thread() 대체"""
+
+    def __init__(self, task_func):
+        super().__init__()
+        self._task_func = task_func
+
+    def run(self):
+        self._task_func()
 
 
 # ============================================================================
@@ -223,11 +234,17 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self._current_worker: Optional[Worker] = None  # QThread 참조 유지
         self.signals = WorkerSignals()
         self.signals.log.connect(self.log_message)
         self.signals.error.connect(self.show_error)
         self.signals.finished.connect(self.on_task_finished)
         self.init_ui()
+
+    def _start_worker(self, task_func):
+        """Worker QThread 생성 및 시작 (이전 Thread() 대체)"""
+        self._current_worker = Worker(task_func)
+        self._current_worker.start()
 
     def init_ui(self):
         self.setWindowTitle("금형이력카드 처리 프로그램")
@@ -674,7 +691,23 @@ class MainWindow(QMainWindow):
         self.pdf_run_btn.setEnabled(True)
 
     def log_message(self, msg):
-        self.log_text.append(msg)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        safe_msg = _html.escape(msg)
+
+        if msg.startswith("✓"):
+            color = "#2E7D32"   # 초록 — 성공
+        elif msg.startswith("✗"):
+            color = "#C62828"   # 빨강 — 오류
+        elif any(k in msg for k in ("경고", "Warning", "⚠")):
+            color = "#E65100"   # 주황 — 경고
+        else:
+            color = "#212121"   # 기본
+
+        html_line = (
+            f'<span style="color:#9E9E9E;font-size:9pt">[{timestamp}]</span> '
+            f'<span style="color:{color}">{safe_msg}</span>'
+        )
+        self.log_text.append(html_line)
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum())
 
@@ -706,7 +739,7 @@ class MainWindow(QMainWindow):
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     def run_image_extraction(self):
         input_dir = Path(self.img_input_edit.text())
@@ -731,7 +764,7 @@ class MainWindow(QMainWindow):
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     def run_docx_generation(self):
         xlsx_file = Path(self.docx_xlsx_edit.text())
@@ -757,7 +790,7 @@ class MainWindow(QMainWindow):
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     def run_sync(self):
         xlsx_file = Path(self.docx_xlsx_edit.text())
@@ -782,7 +815,7 @@ class MainWindow(QMainWindow):
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     # -----------------------------------------------------------------------
     # 이력 관리
@@ -872,7 +905,7 @@ class MainWindow(QMainWindow):
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     # -----------------------------------------------------------------------
     # 신규 이력카드 발행
@@ -916,7 +949,7 @@ class MainWindow(QMainWindow):
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     # -----------------------------------------------------------------------
     # 도움말
@@ -1165,7 +1198,7 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     def _run_pdf_batch(self):
         input_dir = Path(self.pdf_batch_input.text())
@@ -1185,7 +1218,7 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     def _run_pdf_merge(self):
         count = self.pdf_merge_list.count()
@@ -1210,7 +1243,7 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
 
-        Thread(target=task, daemon=True).start()
+        self._start_worker(task)
 
     def show_history_help(self):
         help_text = """
