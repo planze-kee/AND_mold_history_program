@@ -4,6 +4,7 @@
 import argparse
 import csv
 import json
+import logging
 import re
 import shutil
 import zlib
@@ -19,6 +20,31 @@ from docx.shared import Cm, Pt
 from openpyxl import Workbook, load_workbook
 from PIL import Image
 import sys
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 사용자 정의 예외
+# ============================================================================
+class HWPProcessingError(Exception):
+    """HWP 파일 처리 중 발생하는 오류"""
+    pass
+
+
+class ImageExtractionError(Exception):
+    """이미지 추출 중 발생하는 오류"""
+    pass
+
+
+class DocumentGenerationError(Exception):
+    """Word 문서 생성 중 발생하는 오류"""
+    pass
+
+
+class XLSXProcessingError(Exception):
+    """XLSX 파일 처리 중 발생하는 오류"""
+    pass
 
 
 # ============================================================================
@@ -86,7 +112,7 @@ class HWPTextExtractor:
                 else:
                     try:
                         result.append(chr(char_code))
-                    except:
+                    except (ValueError, OverflowError):
                         pass
 
         return ''.join(result).strip()
@@ -122,7 +148,7 @@ class HWPDataExtractor:
                     try:
                         section_data = ole.openstream(stream_path).read()
                         break
-                    except:
+                    except Exception:
                         pass
 
             if section_data is None:
@@ -131,7 +157,7 @@ class HWPDataExtractor:
 
             try:
                 decompressed = zlib.decompress(section_data, -15)
-            except:
+            except zlib.error:
                 decompressed = section_data
 
             extractor = HWPTextExtractor(decompressed)
@@ -141,7 +167,7 @@ class HWPDataExtractor:
             ole.close()
 
         except Exception as e:
-            pass
+            logger.warning(f"HWP 데이터 추출 실패: {self.filepath} - {e}")
 
         return row
 
@@ -411,8 +437,8 @@ class HWPImageExtractor:
             row_data = extractor.extract()
             self.product_name = self.sanitize_filename(row_data.get('J', '').strip())
             self.drawing_no = self.sanitize_filename(row_data.get('K', '').strip())
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"HWP 메타데이터 추출 실패 (파일명으로 대체): {hwp_path} - {e}")
 
     def sanitize_filename(self, text):
         """파일명으로 사용할 수 없는 문자를 '_'로 치환"""
@@ -428,10 +454,10 @@ class HWPImageExtractor:
         """Try to decompress zlib compressed data"""
         try:
             return zlib.decompress(data, -15)
-        except:
+        except zlib.error:
             try:
                 return zlib.decompress(data)
-            except:
+            except zlib.error:
                 return data
 
     def try_fix_image(self, data):
@@ -439,13 +465,14 @@ class HWPImageExtractor:
             img = Image.open(BytesIO(data))
             img.verify()
             return data, None
-        except:
+        except Exception:
             try:
                 img = Image.open(BytesIO(data))
                 output = BytesIO()
                 img.convert('RGB').save(output, format='JPEG', quality=95)
                 return output.getvalue(), 'jpg'
-            except:
+            except Exception as e:
+                logger.debug(f"이미지 변환 실패 (스킵): {e}")
                 return None, 'error'
 
     def extract_images(self):
@@ -457,7 +484,8 @@ class HWPImageExtractor:
 
         try:
             ole = olefile.OleFileIO(self.hwp_path)
-        except:
+        except (olefile.Error, OSError) as e:
+            logger.warning(f"OLE 파일 열기 실패: {self.hwp_path} - {e}")
             return 0
 
         extracted_count = 0
@@ -503,12 +531,14 @@ class HWPImageExtractor:
 
                         extracted_count += 1
 
-                    except:
+                    except Exception as e:
+                        logger.debug(f"BinData 스트림 처리 실패 (스킵): {e}")
                         continue
 
             ole.close()
 
-        except:
+        except Exception as e:
+            logger.error(f"이미지 추출 중 오류: {self.hwp_path} - {e}")
             return 0
 
         return extracted_count
@@ -735,7 +765,7 @@ class DocumentFiller:
             try:
                 # 파일명에 공백이 있을 수 있으니 escape 처리
                 matches.extend(img_dir.glob(f"*{search_stem}*{ext}"))
-            except:
+            except (OSError, ValueError):
                 pass
 
         if matches:
@@ -878,8 +908,8 @@ class DocumentFiller:
             img_status = "OK" if image_path else "NONE"
             try:
                 print(f"[{idx}/{total}] saved: {out_name}.docx (replaced={replaced}, image={img_status}, inserted={inserted})")
-            except:
-                # Handle encoding issues with image filenames
+            except UnicodeEncodeError:
+                # Handle encoding issues with image filenames on some terminals
                 print(f"[{idx}/{total}] saved: {out_name}.docx (image={img_status}, inserted={inserted})")
 
         # XLSX의 "金型写真" 컬럼 업데이트
