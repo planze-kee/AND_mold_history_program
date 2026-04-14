@@ -367,7 +367,7 @@ class HWPProcessor:
     ]
 
     @classmethod
-    def extract_rows_from_hwp(cls, input_dir: Path) -> List[List[str]]:
+    def extract_rows_from_hwp(cls, input_dir: Path, callback=None) -> List[List[str]]:
         hwp_files = sorted(input_dir.glob("*.hwp"))
         if not hwp_files:
             raise FileNotFoundError(f"No HWP files found in: {input_dir}")
@@ -375,7 +375,11 @@ class HWPProcessor:
         rows: List[List[str]] = []
         total = len(hwp_files)
         for idx, hwp_file in enumerate(hwp_files, start=1):
-            print(f"[{idx}/{total}] extracting: {hwp_file.name}")
+            msg = f"[{idx}/{total}] 추출 중: {hwp_file.name}"
+            if callback:
+                callback(msg)
+            else:
+                print(msg)
             extractor = HWPDataExtractor(str(hwp_file))
             row_data = extractor.extract()
             row_values = [row_data.get(chr(65 + i), "") for i in range(29)]
@@ -398,16 +402,19 @@ class HWPProcessor:
         wb.save(output_xlsx)
 
     @classmethod
-    def process(cls, input_dir: Path, output_xlsx: Path) -> None:
+    def process(cls, input_dir: Path, output_xlsx: Path, callback=None) -> None:
         """Main entry point: HWP folder → XLSX file"""
         if not input_dir.exists():
             raise FileNotFoundError(f"input-dir not found: {input_dir}")
 
-        rows = cls.extract_rows_from_hwp(input_dir)
+        rows = cls.extract_rows_from_hwp(input_dir, callback=callback)
         cls.save_xlsx(rows, output_xlsx)
 
-        print(f"Saved: {output_xlsx}")
-        print(f"Rows: {len(rows)}")
+        msg = f"✓ 저장 완료: {output_xlsx} ({len(rows)}행)"
+        if callback:
+            callback(msg)
+        else:
+            print(msg)
 
 
 # ============================================================================
@@ -846,8 +853,15 @@ class DocumentFiller:
         return rows
 
     @classmethod
-    def process(cls, xlsx_path: Path, template_path: Path, out_dir: Path, img_dir: Path, limit: int = 0) -> None:
+    def process(cls, xlsx_path: Path, template_path: Path, out_dir: Path, img_dir: Path,
+                limit: int = 0, callback=None) -> None:
         """Main entry point: XLSX + Template → DOCX files with images"""
+        def _log(msg):
+            if callback:
+                callback(msg)
+            else:
+                print(msg)
+
         if not xlsx_path.exists():
             raise FileNotFoundError(f"XLSX not found: {xlsx_path}")
         if not template_path.exists():
@@ -857,7 +871,7 @@ class DocumentFiller:
         if limit > 0:
             rows = rows[:limit]
         if not rows:
-            print("No rows in XLSX")
+            _log("XLSX에 처리할 행이 없습니다.")
             return
 
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -883,7 +897,6 @@ class DocumentFiller:
 
             # 2. "金型写真"으로 못 찾으면 XLSX의 도번으로 시도
             if not image_path:
-                # 도번 컬럼 찾기: aliases 사용
                 drawing_no = cls.value_by_aliases(nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
                 if drawing_no:
                     image_path = cls.find_image_for_output(img_dir, drawing_no)
@@ -906,15 +919,11 @@ class DocumentFiller:
             image_updates[idx] = image_path.name if image_path else ""
 
             img_status = "OK" if image_path else "NONE"
-            try:
-                print(f"[{idx}/{total}] saved: {out_name}.docx (replaced={replaced}, image={img_status}, inserted={inserted})")
-            except UnicodeEncodeError:
-                # Handle encoding issues with image filenames on some terminals
-                print(f"[{idx}/{total}] saved: {out_name}.docx (image={img_status}, inserted={inserted})")
+            _log(f"[{idx}/{total}] 저장: {out_name}.docx (치환={replaced}, 이미지={img_status})")
 
         # XLSX의 "金型写真" 컬럼 업데이트
         cls._update_xlsx_images(xlsx_path, image_updates)
-        print(f"\nXLSX updated with actual image filenames")
+        _log(f"✓ XLSX 이미지 컬럼 업데이트 완료")
 
     @classmethod
     def _update_xlsx_images(cls, xlsx_path: Path, image_updates: Dict[int, str]) -> None:
