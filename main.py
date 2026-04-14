@@ -2,7 +2,6 @@
 금형이력카드 처리 프로그램 - PyQt GUI
 """
 import sys
-import os
 from datetime import date
 from pathlib import Path
 from threading import Thread
@@ -257,7 +256,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.create_docx_tab(), "문서 생성/동기화")
         tabs.addTab(self.create_history_tab(), "이력 관리")
         tabs.addTab(self.create_pdf_tab(), "PDF 변환/병합")
-        tabs.addTab(self.create_hwp_tab(), "HWP 처리")
+        tabs.addTab(self.create_hwp_tab(), "HWP to 엑셀")
         tabs.addTab(self.create_image_tab(), "이미지 추출")
         main_layout.addWidget(tabs)
 
@@ -456,7 +455,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("템플릿:"))
-        self.docx_template_edit = QLineEdit("data/templates/11-000_양식.docx")
+        self.docx_template_edit = QLineEdit("data/templates/Word_양식.docx")
         hbox.addWidget(self.docx_template_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(60)
@@ -550,7 +549,7 @@ class MainWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         hbox.addWidget(QLabel("템플릿 파일:"))
-        self.hist_template_edit = QLineEdit("data/templates/11-000_양식.docx")
+        self.hist_template_edit = QLineEdit("data/templates/Word_양식.docx")
         hbox.addWidget(self.hist_template_edit)
         btn = QPushButton("찾기...")
         btn.setMaximumWidth(55)

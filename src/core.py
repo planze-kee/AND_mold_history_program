@@ -489,8 +489,8 @@ class HWPImageExtractor:
                             final_fmt = 'jpg'
 
                         image_index = extracted_count + 1
-                        # 품명_도면번호 형식으로 생성
-                        base_filename = f"{self.product_name}_{self.drawing_no}"
+                        # 품명_도번 형식으로 생성 (예: VFD HOLDER_1072001450.jpg)
+                        base_filename = f"{self.product_name}_{self.drawing_no}" if self.product_name and self.drawing_no else self.file_name
                         if image_index == 1:
                             output_filename = f"{base_filename}.{final_fmt}"
                         else:
@@ -701,10 +701,50 @@ class DocumentFiller:
 
     @classmethod
     def find_image_for_output(cls, img_dir: Path, output_stem: str) -> Optional[Path]:
+        """이미지 파일 찾기 (품명_도번 형식)
+
+        1. 정확한 파일명으로 먼저 찾기
+        2. sanitize 처리된 파일명으로 찾기
+        3. output_stem에 포함된 도번으로도 확인
+        """
+        if not output_stem or not img_dir.exists():
+            return None
+
+        # 정확한 파일명으로 찾기
         for ext in cls.IMAGE_EXTS:
             p = img_dir / f"{output_stem}{ext}"
             if p.exists():
                 return p
+
+        # sanitize 처리한 이름으로 찾기 (파일명 사용 불가 문자 처리)
+        sanitized_stem = re.sub(r'[<>:"/\\|?*]', '_', output_stem)
+        if sanitized_stem != output_stem:
+            for ext in cls.IMAGE_EXTS:
+                p = img_dir / f"{sanitized_stem}{ext}"
+                if p.exists():
+                    return p
+
+        # output_stem을 sanitize한 후 glob으로 찾기
+        # 예: output_stem="1072001446 / 2001447"
+        #     sanitized="1072001446 _ 2001447"
+        #     파일: "FRONT POLE _ REAR POLE_1072001446 _ 2001447.jpg"
+        # → glob: "*1072001446 _ 2001447*"로 검색
+        matches = []
+        search_stem = sanitized_stem  # 이미 sanitize된 버전 사용
+        for ext in cls.IMAGE_EXTS:
+            try:
+                # 파일명에 공백이 있을 수 있으니 escape 처리
+                matches.extend(img_dir.glob(f"*{search_stem}*{ext}"))
+            except:
+                pass
+
+        if matches:
+            # 연번이 없는 파일 우선 (예: "xxx_yyy.jpg" > "xxx_yyy_2.jpg")
+            matches_no_suffix = [m for m in matches if not m.stem.endswith(('_2', '_3', '_4', '_5'))]
+            if matches_no_suffix:
+                return matches_no_suffix[0]
+            return matches[0]
+
         return None
 
     @classmethod
@@ -792,6 +832,9 @@ class DocumentFiller:
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        # 이미지 파일명 저장 (XLSX 업데이트용)
+        image_updates = {}  # {row_idx: image_filename}
+
         total = len(rows)
         for idx, row in enumerate(rows, start=1):
             doc = Document(str(template_path))
@@ -800,12 +843,28 @@ class DocumentFiller:
 
             out_name = cls.pick_output_name(row, idx)
 
-            # XLSX의 "金型写真" 열에서 이미지 파일명 조회
+            # 이미지 파일 찾기: 우선순위
+            image_path = None
+
+            # 1. XLSX의 "金型写真"(품명_도번)으로 먼저 시도
             image_name = row.get("金型写真", "").strip()
-            search_name = image_name if image_name else out_name
-            image_path = cls.find_image_for_output(img_dir, search_name)
-            # img_dir에 없으면 out_dir/.data/ 도 검색 (신규 발행 첨부 이미지)
+            if image_name:
+                image_path = cls.find_image_for_output(img_dir, image_name)
+
+            # 2. "金型写真"으로 못 찾으면 XLSX의 도번으로 시도
             if not image_path:
+                # 도번 컬럼 찾기: aliases 사용
+                drawing_no = cls.value_by_aliases(nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
+                if drawing_no:
+                    image_path = cls.find_image_for_output(img_dir, drawing_no)
+
+            # 3. 도번으로도 못 찾으면 out_name(연번)으로 시도
+            if not image_path:
+                image_path = cls.find_image_for_output(img_dir, out_name)
+
+            # 4. img_dir에 없으면 out_dir/.data/ 도 검색 (신규 발행 첨부 이미지)
+            if not image_path:
+                search_name = image_name or out_name
                 image_path = cls.find_image_for_output(out_dir / ".data", search_name)
 
             inserted = cls.insert_images_by_token(doc, image_path)
@@ -813,8 +872,57 @@ class DocumentFiller:
             out_path = cls.unique_path(out_dir / f"{out_name}.docx")
             doc.save(str(out_path))
 
-            img_status = image_path.name if image_path else "NONE"
-            print(f"[{idx}/{total}] saved: {out_path} (replaced={replaced}, image={img_status}, inserted={inserted})")
+            # 실제 삽입된 이미지 파일명 저장 (XLSX 업데이트용)
+            image_updates[idx] = image_path.name if image_path else ""
+
+            img_status = "OK" if image_path else "NONE"
+            try:
+                print(f"[{idx}/{total}] saved: {out_name}.docx (replaced={replaced}, image={img_status}, inserted={inserted})")
+            except:
+                # Handle encoding issues with image filenames
+                print(f"[{idx}/{total}] saved: {out_name}.docx (image={img_status}, inserted={inserted})")
+
+        # XLSX의 "金型写真" 컬럼 업데이트
+        cls._update_xlsx_images(xlsx_path, image_updates)
+        print(f"\nXLSX updated with actual image filenames")
+
+    @classmethod
+    def _update_xlsx_images(cls, xlsx_path: Path, image_updates: Dict[int, str]) -> None:
+        """XLSX의 金型写真 컬럼에 실제 이미지 파일명 기록"""
+        try:
+            wb = load_workbook(xlsx_path)
+            ws = wb.active
+
+            # 金型写真 컬럼 정확하게 찾기 (전체 텍스트 매칭)
+            photo_col_idx = None
+            for col_idx in range(1, 40):
+                h = ws.cell(1, col_idx).value
+                if h:
+                    h_str = str(h).strip()
+                    # 정확하게 "金型写真" 찾기 (다른 컬럼과 혼동 방지)
+                    if "金型写真" in h_str:
+                        photo_col_idx = col_idx
+                        break
+
+            # 金型写真 컬럼이 없으면 마지막 컬럼 다음에 추가
+            if photo_col_idx is None:
+                # 마지막 비어있지 않은 컬럼 찾기
+                last_col = 1
+                for col_idx in range(1, 40):
+                    if ws.cell(1, col_idx).value:
+                        last_col = col_idx
+                photo_col_idx = last_col + 1
+                # 헤더 추가
+                ws.cell(1, photo_col_idx).value = "金型写真"
+
+            # 이미지 파일명 업데이트
+            for row_idx, img_filename in image_updates.items():
+                ws.cell(row_idx + 1, photo_col_idx).value = img_filename
+
+            wb.save(xlsx_path)
+            wb.close()
+        except Exception as e:
+            print(f"Warning: Could not update XLSX with image filenames: {e}")
 
 
 # ============================================================================
@@ -1289,7 +1397,7 @@ if __name__ == "__main__":
     # XLSX → DOCX
     docx_parser = subparsers.add_parser('xlsx2docx', help='Fill DOCX files from XLSX')
     docx_parser.add_argument('--xlsx', default='output_from_hwp.xlsx', help='Input XLSX path')
-    docx_parser.add_argument('--template', default='11-000_양식.docx', help='Template DOCX path')
+    docx_parser.add_argument('--template', default='Word_양식.docx', help='Template DOCX path')
     docx_parser.add_argument('--out-dir', default='output', help='Output directory')
     docx_parser.add_argument('--img-dir', default='img', help='Image directory')
     docx_parser.add_argument('--limit', type=int, default=0, help='Process first N rows only')

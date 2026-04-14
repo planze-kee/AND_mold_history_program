@@ -10,6 +10,8 @@ build/
 # ── 실제 데이터 (소스 HWP / 추출 이미지 / 생성된 Word·PDF) ──
 YES/
 img/
+img_backup/
+img_test/
 data/output/
 data/input/
 data/output_pdf/
