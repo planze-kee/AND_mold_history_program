@@ -78,11 +78,24 @@ class NewCardDialog(QDialog):
         xlsx_group.setLayout(xlsx_row)
         main_layout.addWidget(xlsx_group)
 
+        # DB 마지막 항목 표시
+        self.last_entry_label = QLabel("직전 항목: 로딩 중...")
+        self.last_entry_label.setStyleSheet(
+            "background-color: #F5F5F5; border: 1px solid #CCCCCC; border-radius: 3px;"
+            " padding: 4px 8px; color: #555555; font-size: 11px;")
+        main_layout.addWidget(self.last_entry_label)
+
+        # File name: 자동생성 표시 + 사용자 직접 입력
         fn_row = QHBoxLayout()
-        fn_row.addWidget(QLabel("File name (자동생성):"))
-        self.file_name_label = QLabel("계산 중...")
-        self.file_name_label.setStyleSheet("font-weight: bold; color: #1976D2;")
-        fn_row.addWidget(self.file_name_label)
+        fn_row.addWidget(QLabel("File name:"))
+        self.file_name_edit = QLineEdit()
+        self.file_name_edit.setPlaceholderText("계산 중...")
+        self.file_name_edit.setMaximumWidth(130)
+        self.file_name_edit.setToolTip("자동생성값이 기입됩니다. 직접 수정 가능합니다.")
+        fn_row.addWidget(self.file_name_edit)
+        self.file_name_auto_hint = QLabel("")
+        self.file_name_auto_hint.setStyleSheet("color: #999999; font-size: 11px;")
+        fn_row.addWidget(self.file_name_auto_hint)
         fn_row.addStretch()
         main_layout.addLayout(fn_row)
 
@@ -185,11 +198,28 @@ class NewCardDialog(QDialog):
         if xlsx_path.exists():
             try:
                 self._auto_file_name = NewCardManager.get_next_file_name(xlsx_path)
-                self.file_name_label.setText(self._auto_file_name)
+                self.file_name_edit.setText(self._auto_file_name)
+                self.file_name_auto_hint.setText("(자동생성)")
             except Exception:
-                self.file_name_label.setText("오류 (수동 입력 필요)")
+                self._auto_file_name = ""
+                self.file_name_edit.setPlaceholderText("오류 — 직접 입력하세요")
+                self.file_name_auto_hint.setText("")
+            try:
+                last_fn, last_prod = NewCardManager.get_last_entry(xlsx_path)
+                if last_fn or last_prod:
+                    fn_str = last_fn if last_fn else "없음"
+                    prod_str = last_prod if last_prod else "없음"
+                    self.last_entry_label.setText(
+                        f"직전 항목 —  파일명: {fn_str}   |   품명: {prod_str}")
+                else:
+                    self.last_entry_label.setText("직전 항목: (DB 비어있음)")
+            except Exception:
+                self.last_entry_label.setText("직전 항목: (읽기 실패)")
         else:
-            self.file_name_label.setText("XLSX 없음")
+            self._auto_file_name = ""
+            self.file_name_edit.setPlaceholderText("XLSX 없음 — 직접 입력하세요")
+            self.file_name_auto_hint.setText("")
+            self.last_entry_label.setText("직전 항목: XLSX 파일 없음")
 
     def _browse_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -216,7 +246,8 @@ class NewCardDialog(QDialog):
         if missing:
             QMessageBox.warning(self, "입력 오류", f"필수 항목 누락: {', '.join(missing)}")
             return
-        self.result_data = {"File name": self._auto_file_name or "new"}
+        chosen_name = self.file_name_edit.text().strip() or self._auto_file_name or "new"
+        self.result_data = {"File name": chosen_name}
         for key, edit in self.fields.items():
             self.result_data[key] = edit.text().strip()
         for key, cb in self.checkboxes.items():

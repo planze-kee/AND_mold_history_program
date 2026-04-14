@@ -1402,6 +1402,18 @@ class NewCardManager:
         return f"{prefix}{max_serial + 1:03d}"
 
     @classmethod
+    def get_last_entry(cls, xlsx_path: Path) -> Tuple[str, str]:
+        """DB 마지막 행의 파일명과 품명 반환 (신규 발행 다이얼로그 표시용)"""
+        rows = DocumentFiller.load_rows_from_xlsx(xlsx_path)
+        if not rows:
+            return "", ""
+        last = rows[-1]
+        file_name = last.get("File name", "").strip()
+        nrow = DocumentFiller.row_norm_map(last)
+        product = DocumentFiller.value_by_aliases(nrow, ["品  名", "品 名", "품명"])
+        return file_name, (product.strip() if product else "")
+
+    @classmethod
     def sanitize(cls, text: str) -> str:
         return re.sub(r'[<>:"/\\|?*]', "_", text)
 
