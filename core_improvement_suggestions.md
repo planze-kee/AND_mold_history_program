@@ -59,14 +59,13 @@
 | **`apply_to_word` 이미지 누락** | ✅ 완료 | 4단계 fallback chain 적용 (金型写真 → 図番番号 → 品名 → 연번 → .data/) |
 | **신규 발행 다이얼로그** | ✅ 완료 | `get_last_entry()` 추가 — DB 직전 항목 표시 |
 | **callback 파라미터 누락** | ✅ 완료 | `HWPProcessor.process()`, `DocumentFiller.process()` 시그니처 수정 |
+| **1.4 타입 힌팅 강화** | ✅ 완료 | `Callable/Any` import 추가, callback→`Optional[Callable[[str],None]]`, HWPImageExtractor 전 메서드, Dict→Dict[str,str/Any], paragraph→Any |
+| **2.2 ImageCache** | ✅ 완료 | `ImageCache` 클래스 신설 (O(1) 탐색), `process()`·`sync()` 루프 전 한 번 인덱싱으로 반복 glob 제거 |
+| **2.1 멀티프로세싱 HWP 처리** | ✅ 완료 | `ProcessPoolExecutor` 도입, 파일 5개 이상 시 병렬 처리 (`MP_THRESHOLD=5`), 결과는 원래 파일 순서로 정렬 반환 |
 
 ### 미완료 항목
 
-| 항목 | 우선순위 | 비고 |
-|------|---------|------|
-| 1.4 타입 힌팅 강화 | Low | mypy 도입 시 함께 진행 |
-| 2.1 멀티프로세싱 HWP 처리 | Low | 파일 수 많을 때 효과적 |
-| 2.2 이미지 검색 캐싱 (ImageCache) | Low | 현재 성능으로 충분 |
+없음 — 전체 완료
 
 ---
 

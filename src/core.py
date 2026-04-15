@@ -13,7 +13,7 @@ import struct
 import olefile
 from datetime import datetime, date
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from io import BytesIO
 
 from docx import Document
@@ -140,7 +140,7 @@ class HWPFieldExtractor:
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
-    def extract(self, row: Dict) -> None:
+    def extract(self, row: Dict[str, str]) -> None:
         """폼 텍스트 전체에서 모든 필드를 추출하여 row에 기록"""
         self._apply_pattern1(row)
         self._apply_pattern2(row)
@@ -148,7 +148,7 @@ class HWPFieldExtractor:
     # ------------------------------------------------------------------
     # Pattern 1: "라벨 : 값" 동일 라인 형식
     # ------------------------------------------------------------------
-    def _apply_pattern1(self, row: Dict) -> None:
+    def _apply_pattern1(self, row: Dict[str, str]) -> None:
         for text in self.texts:
             if ':' not in text:
                 continue
@@ -164,7 +164,7 @@ class HWPFieldExtractor:
     # ------------------------------------------------------------------
     # Pattern 2: 라벨 다음 줄에 값이 오는 형식
     # ------------------------------------------------------------------
-    def _apply_pattern2(self, row: Dict) -> None:
+    def _apply_pattern2(self, row: Dict[str, str]) -> None:
         i = 0
         while i < len(self.texts):
             text = self.texts[i]
@@ -280,7 +280,7 @@ class HWPDataExtractor:
         self.filepath = hwp_filepath
         self.filename = Path(hwp_filepath).stem
 
-    def sanitize_filename(self, text):
+    def sanitize_filename(self, text: str) -> str:
         """파일명으로 사용할 수 없는 문자를 '_'로 치환"""
         return re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, text)
 
@@ -323,7 +323,7 @@ class HWPDataExtractor:
 
         return row
 
-    def _extract_fields(self, row: Dict, texts: List[str]):
+    def _extract_fields(self, row: Dict[str, str], texts: List[str]) -> None:
         """Extract field values from text list with form-specific parsing.
 
         폼 시작 위치를 찾아 HWPFieldExtractor에 위임한다.
@@ -356,31 +356,88 @@ class HWPDataExtractor:
 # ============================================================================
 # HWP 처리기 (HWP → XLSX)
 # ============================================================================
+
+def _extract_hwp_worker(hwp_path: Path) -> Tuple[Path, List[str]]:
+    """멀티프로세싱 워커: HWP 파일 하나를 추출하고 (파일경로, 행값) 반환.
+
+    ProcessPoolExecutor에서 실행되므로 최상위(top-level) 함수여야 한다.
+    """
+    extractor = HWPDataExtractor(str(hwp_path))
+    row_data = extractor.extract()
+    row_values = [row_data.get(chr(65 + i), "") for i in range(HWPConstants.FIELD_COUNT)]
+    return hwp_path, row_values
+
+
 class HWPProcessor:
     """Process HWP files and convert to XLSX"""
 
     CANONICAL_HEADERS = DocumentConstants.CANONICAL_HEADERS
 
+    # 멀티프로세싱 활성화 기준 파일 수 (이 수 이상이면 병렬 처리)
+    MP_THRESHOLD: int = 5
+
     @classmethod
-    def extract_rows_from_hwp(cls, input_dir: Path, callback=None) -> List[List[str]]:
+    def extract_rows_from_hwp(
+        cls,
+        input_dir: Path,
+        callback: Optional[Callable[[str], None]] = None,
+        workers: Optional[int] = None,
+    ) -> List[List[str]]:
+        """HWP 파일들을 읽어 행 목록을 반환한다.
+
+        Args:
+            input_dir: HWP 파일이 있는 디렉터리.
+            callback: 진행 상황을 전달할 함수 (GUI 연동용).
+            workers: 병렬 프로세스 수. None이면 CPU 수에 따라 자동 결정.
+                     파일 수가 MP_THRESHOLD 미만이면 단일 프로세스로 실행.
+        """
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
         hwp_files = sorted(input_dir.glob("*.hwp"))
         if not hwp_files:
             raise FileNotFoundError(f"No HWP files found in: {input_dir}")
 
-        rows: List[List[str]] = []
         total = len(hwp_files)
-        for idx, hwp_file in enumerate(hwp_files, start=1):
-            msg = f"[{idx}/{total}] 추출 중: {hwp_file.name}"
-            if callback:
-                callback(msg)
-            else:
-                print(msg)
-            extractor = HWPDataExtractor(str(hwp_file))
-            row_data = extractor.extract()
-            row_values = [row_data.get(chr(65 + i), "") for i in range(HWPConstants.FIELD_COUNT)]
-            rows.append(row_values)
 
-        return rows
+        # 파일 수가 적으면 단일 프로세스 (프로세스 생성 오버헤드 방지)
+        use_mp = total >= cls.MP_THRESHOLD
+        if use_mp:
+            cpu_count = multiprocessing.cpu_count()
+            max_workers = workers if workers else max(1, min(cpu_count, total))
+        else:
+            max_workers = 1
+
+        # 순서 보장을 위해 결과를 {Path: row_values} 딕셔너리에 수집
+        results: Dict[Path, List[str]] = {}
+
+        if use_mp and max_workers > 1:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future_to_path = {
+                    executor.submit(_extract_hwp_worker, f): f for f in hwp_files
+                }
+                done = 0
+                for future in as_completed(future_to_path):
+                    done += 1
+                    hwp_path, row_values = future.result()
+                    results[hwp_path] = row_values
+                    msg = f"[{done}/{total}] 완료: {hwp_path.name}"
+                    if callback:
+                        callback(msg)
+                    else:
+                        print(msg)
+        else:
+            for idx, hwp_file in enumerate(hwp_files, start=1):
+                msg = f"[{idx}/{total}] 추출 중: {hwp_file.name}"
+                if callback:
+                    callback(msg)
+                else:
+                    print(msg)
+                _, row_values = _extract_hwp_worker(hwp_file)
+                results[hwp_file] = row_values
+
+        # 원래 파일 순서대로 정렬하여 반환
+        return [results[f] for f in hwp_files]
 
     @classmethod
     def save_xlsx(cls, rows: List[List[str]], output_xlsx: Path) -> None:
@@ -397,12 +454,18 @@ class HWPProcessor:
         wb.save(output_xlsx)
 
     @classmethod
-    def process(cls, input_dir: Path, output_xlsx: Path, callback=None) -> None:
+    def process(
+        cls,
+        input_dir: Path,
+        output_xlsx: Path,
+        callback: Optional[Callable[[str], None]] = None,
+        workers: Optional[int] = None,
+    ) -> None:
         """Main entry point: HWP folder → XLSX file"""
         if not input_dir.exists():
             raise FileNotFoundError(f"input-dir not found: {input_dir}")
 
-        rows = cls.extract_rows_from_hwp(input_dir, callback=callback)
+        rows = cls.extract_rows_from_hwp(input_dir, callback=callback, workers=workers)
         cls.save_xlsx(rows, output_xlsx)
 
         msg = f"✓ 저장 완료: {output_xlsx} ({len(rows)}행)"
@@ -420,7 +483,7 @@ class HWPImageExtractor:
 
     MAGIC_BYTES = HWPConstants.IMAGE_MAGIC_BYTES
 
-    def __init__(self, hwp_path, output_dir='img'):
+    def __init__(self, hwp_path: str, output_dir: str = 'img') -> None:
         self.hwp_path = hwp_path
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
@@ -437,17 +500,17 @@ class HWPImageExtractor:
         except Exception as e:
             logger.warning(f"HWP 메타데이터 추출 실패 (파일명으로 대체): {hwp_path} - {e}")
 
-    def sanitize_filename(self, text):
+    def sanitize_filename(self, text: str) -> str:
         """파일명으로 사용할 수 없는 문자를 '_'로 치환"""
         return re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, text)
 
-    def detect_image_format(self, data):
+    def detect_image_format(self, data: bytes) -> Optional[str]:
         for magic, fmt in self.MAGIC_BYTES.items():
             if data.startswith(magic):
                 return fmt
         return None
 
-    def try_decompress(self, data):
+    def try_decompress(self, data: bytes) -> bytes:
         """Try to decompress zlib compressed data"""
         try:
             return zlib.decompress(data, -15)
@@ -457,7 +520,7 @@ class HWPImageExtractor:
             except zlib.error:
                 return data
 
-    def try_fix_image(self, data):
+    def try_fix_image(self, data: bytes) -> Tuple[Optional[bytes], Optional[str]]:
         try:
             img = Image.open(BytesIO(data))
             img.verify()
@@ -472,7 +535,7 @@ class HWPImageExtractor:
                 logger.debug(f"이미지 변환 실패 (스킵): {e}")
                 return None, 'error'
 
-    def extract_images(self):
+    def extract_images(self) -> int:
         if not Path(self.hwp_path).exists():
             return 0
 
@@ -548,6 +611,114 @@ class HWPImageExtractor:
 
 
 # ============================================================================
+# 이미지 캐시 (반복 glob 방지)
+# ============================================================================
+class ImageCache:
+    """디렉터리 내 이미지 파일을 한 번 인덱싱하여 O(1) 탐색을 제공한다.
+
+    DocumentFiller.process() / DocxSyncManager.sync() 처럼 같은 img_dir를
+    여러 행에 걸쳐 반복 탐색하는 경우 이 캐시를 먼저 생성하고 넘겨준다.
+    이미지 파일이 추가/삭제된 경우 invalidate() 후 rebuild()를 호출한다.
+    """
+
+    def __init__(self, img_dir: Path) -> None:
+        self.img_dir = img_dir
+        self._index: Dict[str, Path] = {}
+        if img_dir.exists():
+            self._build()
+
+    # ------------------------------------------------------------------
+    # 인덱스 빌드
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        """이미지 디렉터리 전체를 스캔하여 stem → Path 인덱스를 구성한다.
+
+        - 정확한 stem: "VFD HOLDER_1072001450"
+        - sanitized stem: "VFD HOLDER_1072001450" (특수문자 치환)
+        - 연번 제거 stem: "VFD HOLDER_1072001450" (말미 _2, _3 ... 제거)
+        """
+        self._index.clear()
+        exts = set(DocumentConstants.IMAGE_EXTS)
+        for p in self.img_dir.iterdir():
+            if not p.is_file() or p.suffix.lower() not in exts:
+                continue
+            stem = p.stem
+
+            # 정확한 stem 등록 (나중에 들어온 파일이 앞의 것을 덮어쓰지 않도록
+            # 연번 없는 파일을 우선)
+            self._register(stem, p)
+
+            # sanitized stem (특수문자 → '_')
+            sanitized = re.sub(
+                DocumentConstants.INVALID_FILENAME_CHARS,
+                DocumentConstants.INVALID_FILENAME_REPLACEMENT,
+                stem,
+            )
+            if sanitized != stem:
+                self._register(sanitized, p)
+
+            # 연번 접미사 제거 stem (예: "xxx_2" → "xxx")
+            base = re.sub(r'_\d+$', '', stem)
+            if base != stem:
+                self._register(base, p)
+
+    def _register(self, key: str, path: Path) -> None:
+        """연번 없는 파일(우선순위 높음)이 있을 때 덮어쓰지 않는다."""
+        if key not in self._index:
+            self._index[key] = path
+        else:
+            # 현재 등록된 파일이 연번 접미사를 가지면 새 파일로 교체
+            existing_stem = self._index[key].stem
+            if re.search(r'_\d+$', existing_stem):
+                self._index[key] = path
+
+    # ------------------------------------------------------------------
+    # 탐색
+    # ------------------------------------------------------------------
+    def find(self, stem: str) -> Optional[Path]:
+        """stem(확장자 없음)으로 이미지를 O(1)에 검색한다.
+
+        1. 정확한 stem 탐색
+        2. sanitized stem 탐색
+        3. img_dir가 바뀐 경우를 위해 존재 여부 재확인
+        """
+        # 1. 정확한 stem
+        result = self._index.get(stem)
+        if result and result.exists():
+            return result
+
+        # 2. sanitized stem
+        sanitized = re.sub(
+            DocumentConstants.INVALID_FILENAME_CHARS,
+            DocumentConstants.INVALID_FILENAME_REPLACEMENT,
+            stem,
+        )
+        if sanitized != stem:
+            result = self._index.get(sanitized)
+            if result and result.exists():
+                return result
+
+        # 3. trailing underscore/dash 제거 후 재시도
+        clean = stem.rstrip('_- ')
+        if clean and clean != stem:
+            result = self._index.get(clean)
+            if result and result.exists():
+                return result
+
+        return None
+
+    def invalidate(self) -> None:
+        """캐시 무효화 후 재빌드 (파일 추가/삭제 후 호출)"""
+        if self.img_dir.exists():
+            self._build()
+        else:
+            self._index.clear()
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+
+# ============================================================================
 # 문서 채우기 (XLSX → DOCX)
 # ============================================================================
 class DocumentFiller:
@@ -613,14 +784,14 @@ class DocumentFiller:
         return re.sub(r"\{[^{}]+\}", repl, text), replaced_count, replaced_labels
 
     @staticmethod
-    def apply_small_font_if_needed(paragraph, replaced_labels: Set[str]) -> None:
+    def apply_small_font_if_needed(paragraph: Any, replaced_labels: Set[str]) -> None:
         if not ({"BASE", "CORE"} & replaced_labels):
             return
         for run in paragraph.runs:
             run.font.size = Pt(DocumentConstants.MOLD_MATERIAL_FONT_SIZE_PT)
 
     @classmethod
-    def _copy_text_run_format(cls, src_run, dst_run) -> None:
+    def _copy_text_run_format(cls, src_run: Any, dst_run: Any) -> None:
         dst_run.bold = src_run.bold
         dst_run.italic = src_run.italic
         dst_run.underline = src_run.underline
@@ -629,13 +800,13 @@ class DocumentFiller:
         dst_run.font.size = src_run.font.size
 
     @classmethod
-    def _insert_run_after(cls, paragraph, after_run, text: str = ""):
+    def _insert_run_after(cls, paragraph: Any, after_run: Any, text: str = "") -> Any:
         new_run = paragraph.add_run(text)
         after_run._r.addnext(new_run._r)
         return new_run
 
     @classmethod
-    def _insert_image_in_paragraph(cls, paragraph, image_path: Optional[Path]) -> int:
+    def _insert_image_in_paragraph(cls, paragraph: Any, image_path: Optional[Path]) -> int:
         para_text = paragraph.text or ""
         if cls.IMAGE_TOKEN not in para_text:
             return 0
@@ -839,7 +1010,7 @@ class DocumentFiller:
 
     @classmethod
     def process(cls, xlsx_path: Path, template_path: Path, out_dir: Path, img_dir: Path,
-                limit: int = 0, callback=None) -> None:
+                limit: int = 0, callback: Optional[Callable[[str], None]] = None) -> None:
         """Main entry point: XLSX + Template → DOCX files with images"""
         def _log(msg):
             if callback:
@@ -864,6 +1035,10 @@ class DocumentFiller:
         # 이미지 파일명 저장 (XLSX 업데이트용)
         image_updates = {}  # {row_idx: image_filename}
 
+        # ImageCache: img_dir 전체를 한 번 인덱싱 (행마다 반복 glob 방지)
+        img_cache = ImageCache(img_dir)
+        data_cache = ImageCache(out_dir / ".data")
+
         total = len(rows)
         for idx, row in enumerate(rows, start=1):
             doc = Document(str(template_path))
@@ -878,29 +1053,28 @@ class DocumentFiller:
             # 1. XLSX의 "金型写真"(품명_도번)으로 먼저 시도
             image_name = row.get("金型写真", "").strip()
             if image_name:
-                image_path = cls.find_image_for_output(img_dir, image_name)
+                image_path = img_cache.find(image_name)
 
             # 2. "金型写真"으로 못 찾으면 XLSX의 도번으로 시도
             if not image_path:
                 drawing_no = cls.value_by_aliases(nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
                 if drawing_no:
-                    image_path = cls.find_image_for_output(img_dir, drawing_no)
+                    image_path = img_cache.find(drawing_no)
 
             # 2.5. 품명만으로 검색 (도번 없는 경우: XLSX에 "品名_"처럼 저장된 상황 대비)
             if not image_path:
                 product_name = cls.value_by_aliases(nrow, ["品  名", "品 名", "product_name", "품명"])
                 if product_name:
-                    sanitized_pname = re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, product_name.strip())
-                    image_path = cls.find_image_for_output(img_dir, sanitized_pname)
+                    image_path = img_cache.find(product_name.strip())
 
             # 3. 도번으로도 못 찾으면 out_name(연번)으로 시도
             if not image_path:
-                image_path = cls.find_image_for_output(img_dir, out_name)
+                image_path = img_cache.find(out_name)
 
             # 4. img_dir에 없으면 out_dir/.data/ 도 검색 (신규 발행 첨부 이미지)
             if not image_path:
                 search_name = image_name or out_name
-                image_path = cls.find_image_for_output(out_dir / ".data", search_name)
+                image_path = data_cache.find(search_name)
 
             inserted = cls.insert_images_by_token(doc, image_path)
 
@@ -969,7 +1143,7 @@ class DocxSyncManager:
         return output_dir / cls.MANIFEST_FILENAME
 
     @classmethod
-    def load_manifest(cls, output_dir: Path) -> Dict:
+    def load_manifest(cls, output_dir: Path) -> Dict[str, Any]:
         """manifest.json 로드 (없으면 빈 딕셔너리)"""
         path = cls._manifest_path(output_dir)
         if path.exists():
@@ -981,7 +1155,7 @@ class DocxSyncManager:
         return {}
 
     @classmethod
-    def save_manifest(cls, output_dir: Path, manifest: Dict) -> None:
+    def save_manifest(cls, output_dir: Path, manifest: Dict[str, Any]) -> None:
         """manifest.json 저장"""
         output_dir.mkdir(parents=True, exist_ok=True)
         path = cls._manifest_path(output_dir)
@@ -1000,7 +1174,7 @@ class DocxSyncManager:
         return ""
 
     @classmethod
-    def rename_image_files(cls, img_dir: Path, old_serial: str, new_serial: str, callback=None) -> int:
+    def rename_image_files(cls, img_dir: Path, old_serial: str, new_serial: str, callback: Optional[Callable[[str], None]] = None) -> int:
         """연번 변경에 따른 이미지 파일명 변경"""
         if not img_dir.exists() or not old_serial or old_serial == new_serial:
             return 0
@@ -1018,7 +1192,7 @@ class DocxSyncManager:
 
     @classmethod
     def sync(cls, xlsx_path: Path, template_path: Path, output_dir: Path,
-             img_dir: Path, callback=None) -> None:
+             img_dir: Path, callback: Optional[Callable[[str], None]] = None) -> None:
         """XLSX 변경사항을 DOCX 파일에 동기화"""
         if callback:
             callback("동기화 시작...")
@@ -1074,6 +1248,11 @@ class DocxSyncManager:
         total = len(rows)
         new_manifest = dict(manifest)  # 기존 manifest 복사
 
+        # ImageCache: img_dir 전체를 한 번 인덱싱 (행마다 반복 glob 방지)
+        # 1단계 rename 이후 캐시를 빌드해야 최신 파일명을 반영한다.
+        img_cache = ImageCache(img_dir)
+        data_cache = ImageCache(output_dir / ".data")
+
         for idx, row in enumerate(rows, start=1):
             try:
                 doc = Document(str(template_path))
@@ -1086,35 +1265,30 @@ class DocxSyncManager:
 
                 # 1. XLSX의 金型写真(품명_도번)으로 시도
                 if image_name:
-                    image_path = DocumentFiller.find_image_for_output(img_dir, image_name)
+                    image_path = img_cache.find(image_name)
 
                 # 2. 図番番号로 시도
                 if not image_path:
                     drawing_no = DocumentFiller.value_by_aliases(
                         nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
                     if drawing_no:
-                        image_path = DocumentFiller.find_image_for_output(img_dir, drawing_no)
+                        image_path = img_cache.find(drawing_no)
 
                 # 2.5. 品名으로 시도 (도번 없는 경우)
                 if not image_path:
                     product_name = DocumentFiller.value_by_aliases(
                         nrow, ["品  名", "品 名", "product_name", "품명"])
                     if product_name:
-                        sanitized_pname = re.sub(
-                            DocumentConstants.INVALID_FILENAME_CHARS,
-                            DocumentConstants.INVALID_FILENAME_REPLACEMENT,
-                            product_name.strip())
-                        image_path = DocumentFiller.find_image_for_output(img_dir, sanitized_pname)
+                        image_path = img_cache.find(product_name.strip())
 
                 # 3. out_name(연번)으로 시도
                 if not image_path:
-                    image_path = DocumentFiller.find_image_for_output(img_dir, out_name)
+                    image_path = img_cache.find(out_name)
 
                 # 4. output_dir/.data/ 검색 (신규 발행 첨부 이미지)
                 if not image_path:
                     search_name = image_name or out_name
-                    image_path = DocumentFiller.find_image_for_output(
-                        output_dir / ".data", search_name)
+                    image_path = data_cache.find(search_name)
 
                 DocumentFiller.insert_images_by_token(doc, image_path)
                 out_path = output_dir / f"{out_name}.docx"
@@ -1210,7 +1384,7 @@ class MaintenanceHistoryManager:
 
     @classmethod
     def update_xlsx_reason(cls, docx_path: Path, xlsx_path: Path, content: str,
-                           callback=None) -> bool:
+                           callback: Optional[Callable[[str], None]] = None) -> bool:
         """XLSX의 '事 由' 컬럼을 content로 갱신 (Word 재생성 없음)"""
         stem = docx_path.stem
 
@@ -1270,7 +1444,7 @@ class MaintenanceHistoryManager:
 
     @classmethod
     def apply_to_word(cls, docx_path: Path, xlsx_path: Path, template_path: Path,
-                      img_dir: Path, callback=None) -> bool:
+                      img_dir: Path, callback: Optional[Callable[[str], None]] = None) -> bool:
         """이력 내용을 XLSX에 반영하고 Word 파일 재생성"""
         if not docx_path.exists():
             if callback:
@@ -1556,7 +1730,7 @@ class NewCardManager:
     def generate_card(cls, xlsx_path: Path, template_path: Path, output_dir: Path,
                       img_dir: Path, row_dict: Dict[str, str],
                       image_source_path: Optional[Path] = None,
-                      callback=None) -> Optional[Path]:
+                      callback: Optional[Callable[[str], None]] = None) -> Optional[Path]:
         """신규 이력카드 생성: XLSX 추가 → 이미지 복사(.data/) → Word 파일 생성"""
         try:
             product = cls.sanitize(row_dict.get("品 名", "").strip())

@@ -16,6 +16,7 @@ from src.core import (
     HWPFieldExtractor,
     HWPDataExtractor,
     DocumentFiller,
+    ImageCache,
     MoldHistoryCard,
 )
 from src.constants import (
@@ -402,3 +403,78 @@ class TestConstants:
     def test_path_constants(self):
         assert PathConstants.DATA_DIR == ".data"
         assert PathConstants.MANIFEST_FILE == "manifest.json"
+
+
+# ===========================================================================
+# ImageCache
+# ===========================================================================
+class TestImageCache:
+
+    def test_empty_dir(self, tmp_path):
+        cache = ImageCache(tmp_path)
+        assert len(cache) == 0
+        assert cache.find("anything") is None
+
+    def test_nonexistent_dir(self, tmp_path):
+        cache = ImageCache(tmp_path / "no_such_dir")
+        assert cache.find("x") is None
+
+    def test_exact_match(self, tmp_path):
+        img = tmp_path / "VFD_HOLDER.png"
+        img.write_bytes(b"fake")
+        cache = ImageCache(tmp_path)
+        assert cache.find("VFD_HOLDER") == img
+
+    def test_sanitized_stem_match(self, tmp_path):
+        # 파일명의 특수문자가 '_'로 치환된 경우
+        img = tmp_path / "VFD_HOLDER_1072001450.png"
+        img.write_bytes(b"fake")
+        cache = ImageCache(tmp_path)
+        # 슬래시 포함 도번 → find() 내부에서 sanitize('/'→'_') 후 인덱스 매칭
+        assert cache.find("VFD/HOLDER/1072001450") == img
+        # 이미 sanitize된 버전으로도 동일하게 조회됨
+        assert cache.find("VFD_HOLDER_1072001450") == img
+
+    def test_numbered_suffix_ignored(self, tmp_path):
+        # _2 붙은 파일이 있을 때 base stem으로 찾기
+        img2 = tmp_path / "PART_2.png"
+        img2.write_bytes(b"fake")
+        cache = ImageCache(tmp_path)
+        result = cache.find("PART")
+        assert result == img2
+
+    def test_unnumbered_preferred_over_numbered(self, tmp_path):
+        img_base = tmp_path / "PART.png"
+        img_num = tmp_path / "PART_2.png"
+        img_base.write_bytes(b"base")
+        img_num.write_bytes(b"numbered")
+        cache = ImageCache(tmp_path)
+        assert cache.find("PART") == img_base
+
+    def test_multiple_extensions(self, tmp_path):
+        jpg = tmp_path / "PART.jpg"
+        jpg.write_bytes(b"fake")
+        cache = ImageCache(tmp_path)
+        assert cache.find("PART") == jpg
+
+    def test_non_image_ignored(self, tmp_path):
+        txt = tmp_path / "readme.txt"
+        txt.write_bytes(b"text")
+        cache = ImageCache(tmp_path)
+        assert cache.find("readme") is None
+
+    def test_invalidate_rebuilds(self, tmp_path):
+        cache = ImageCache(tmp_path)
+        assert cache.find("NEW") is None
+
+        new_img = tmp_path / "NEW.png"
+        new_img.write_bytes(b"fake")
+        cache.invalidate()
+        assert cache.find("NEW") == new_img
+
+    def test_trailing_underscore_stripped(self, tmp_path):
+        img = tmp_path / "MR14_CASE.png"
+        img.write_bytes(b"fake")
+        cache = ImageCache(tmp_path)
+        # trailing '_' 을 rstrip한 키로 검색
+        assert cache.find("MR14_CASE_") == img
