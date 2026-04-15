@@ -7,7 +7,7 @@ paths:
   docx_template: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/data/templates/Word_양식_이력일자
     제거본.docx
   docx_img: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/YES/img
-  docx_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/YES
+  docx_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test
   hist_xlsx: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/00.DB-SAMCO.xlsx
   hist_template: data/templates/Word_양식.docx
   hist_img: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/img
@@ -19,4 +19,4 @@ ui:
   window_x: 1982
   window_y: 250
   window_width: 560
-  window_height: 529
+  window_height: 557
