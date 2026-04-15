@@ -83,7 +83,7 @@ class NewCardDialog(QDialog):
         self.last_entry_label = QLabel("직전 항목: 로딩 중...")
         self.last_entry_label.setStyleSheet(
             "background-color: #F5F5F5; border: 1px solid #CCCCCC; border-radius: 3px;"
-            " padding: 4px 8px; color: #555555; font-size: 11px;")
+            " padding: 4px 8px; color: #555555; font-size: 12px;")
         main_layout.addWidget(self.last_entry_label)
 
         # File name: 자동생성 표시 + 사용자 직접 입력
