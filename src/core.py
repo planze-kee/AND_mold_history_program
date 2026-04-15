@@ -202,8 +202,9 @@ class HWPDataExtractor:
                     elif '金型価' in label or '金型価格' in label:
                         row['U'] = value
 
-        # 다음 라벨 목록 (헤더 라벨들)
+        # 다음 라벨 목록 (헤더 라벨들) — 경계 역할: 이 라벨이 나오면 앞 필드 탐색 중단
         next_labels = {
+            '保管会社名', '作成日子', '管理番号',
             '分 類', '分類', '現 保管処', '現保管処', '製作処', 'MODEL名', 'MODEL',
             '量産処', '品 名', '品名', '図番番号', '図番', '金型規格', '規格',
             '金型材質', 'BASE', 'CORE', 'CAVITY 数', 'CAVITY', '金型寿命',
@@ -215,7 +216,16 @@ class HWPDataExtractor:
         while i < len(form_texts):
             text = form_texts[i]
 
-            if text == '分 類' or text == '分類':
+            if text == '管理番号':
+                for j in range(i + 1, min(i + 5, len(form_texts))):
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break
+                    if val.strip():
+                        row['D'] = val
+                        break
+
+            elif text == '分 類' or text == '分類':
                 # 다음 라벨이 아닌 첫 번째 값 찾기
                 for j in range(i + 1, min(i + 5, len(form_texts))):
                     if form_texts[j].strip() and form_texts[j] not in next_labels:
