@@ -1082,12 +1082,39 @@ class DocxSyncManager:
 
                 out_name = DocumentFiller.pick_output_name(row, idx)
                 image_name = row.get("金型写真", "").strip()
-                search_name = image_name if image_name else out_name
-                image_path = DocumentFiller.find_image_for_output(img_dir, search_name)
+                image_path = None
+
+                # 1. XLSX의 金型写真(품명_도번)으로 시도
+                if image_name:
+                    image_path = DocumentFiller.find_image_for_output(img_dir, image_name)
+
+                # 2. 図番番号로 시도
                 if not image_path:
+                    drawing_no = DocumentFiller.value_by_aliases(
+                        nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
+                    if drawing_no:
+                        image_path = DocumentFiller.find_image_for_output(img_dir, drawing_no)
+
+                # 2.5. 品名으로 시도 (도번 없는 경우)
+                if not image_path:
+                    product_name = DocumentFiller.value_by_aliases(
+                        nrow, ["品  名", "品 名", "product_name", "품명"])
+                    if product_name:
+                        sanitized_pname = re.sub(
+                            DocumentConstants.INVALID_FILENAME_CHARS,
+                            DocumentConstants.INVALID_FILENAME_REPLACEMENT,
+                            product_name.strip())
+                        image_path = DocumentFiller.find_image_for_output(img_dir, sanitized_pname)
+
+                # 3. out_name(연번)으로 시도
+                if not image_path:
+                    image_path = DocumentFiller.find_image_for_output(img_dir, out_name)
+
+                # 4. output_dir/.data/ 검색 (신규 발행 첨부 이미지)
+                if not image_path:
+                    search_name = image_name or out_name
                     image_path = DocumentFiller.find_image_for_output(
-                        output_dir / ".data", search_name
-                    )
+                        output_dir / ".data", search_name)
 
                 DocumentFiller.insert_images_by_token(doc, image_path)
                 out_path = output_dir / f"{out_name}.docx"
