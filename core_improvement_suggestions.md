@@ -42,11 +42,39 @@
 
 ---
 
+## ✅ 완료 현황 (2026-04-14, feature/phase1-core-improvements)
+
+| 항목 | 상태 | 내용 |
+|------|------|------|
+| **1.1 예외 처리 개선** | ✅ 완료 | 사용자 정의 예외 4종 추가, bare `except:` 13곳 → `except Exception as e: logger.error(...)` |
+| **5.2 로깅 시스템** | ✅ 완료 | `import logging` + `logger = logging.getLogger(__name__)` 도입 |
+| **HWP 파싱 — 管理番号 누락** | ✅ 완료 | Pattern 2 핸들러 추가, next_labels에 경계 라벨 추가 |
+| **HWP 파싱 — 값 누수 버그** | ✅ 완료 | GATE型式/使用機械/契約日 → 承認日 값 가져오는 버그 수정 (skip→break) |
+| **이미지 파일명** | ✅ 완료 | `品名_図番` 규칙 정착, 도번 없을 때 trailing underscore 없이 `品名`만으로 저장 |
+| **이미지 탐색** | ✅ 완료 | `find_image_for_output` trailing underscore 제거 재탐색, 品名 단독 탐색 step 2.5 추가 |
+| **`apply_to_word` 이미지 누락** | ✅ 완료 | 4단계 fallback chain 적용 (金型写真 → 図番番号 → 品名 → 연번 → .data/) |
+| **신규 발행 다이얼로그** | ✅ 완료 | `get_last_entry()` 추가 — DB 직전 항목 표시 |
+| **callback 파라미터 누락** | ✅ 완료 | `HWPProcessor.process()`, `DocumentFiller.process()` 시그니처 수정 |
+
+### 미완료 항목
+
+| 항목 | 우선순위 | 비고 |
+|------|---------|------|
+| 1.2 매직 넘버/하드코딩 → constants.py | Medium | 기능 영향 없음, 코드 가독성 개선용 |
+| 1.3 함수 길이 감소 (HWPFieldExtractor 분리) | Medium | `_extract_fields()` 여전히 200줄+ |
+| 1.4 타입 힌팅 강화 | Low | mypy 도입 시 함께 진행 |
+| 2.1 멀티프로세싱 HWP 처리 | Low | 파일 수 많을 때 효과적 |
+| 2.2 이미지 검색 캐싱 (ImageCache) | Low | 현재 성능으로 충분 |
+| 3.1 데이터 검증 레이어 (MoldHistoryCard) | Medium | 신규 발행 시 유효성 검증에 활용 가능 |
+| 5.1 단위 테스트 추가 | High | 리팩터링 안전성 확보에 필요 |
+
+---
+
 ## 🔧 개선사항
 
 ### 1. 코드 품질 및 아키텍처
 
-#### 1.1 예외 처리 개선
+#### 1.1 예외 처리 개선 ✅ 완료
 
 **현재 상태**:
 ```python

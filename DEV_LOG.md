@@ -139,6 +139,46 @@
 
 ---
 
+## Phase 1 — 코드 품질 개선 (2026-04-14)
+
+**브랜치**: `feature/phase1-core-improvements`  
+**기반 커밋**: `3b583ba`
+
+### Phase 1-A — 예외 처리 개선 + logging 도입
+
+| 항목 | 내용 |
+|------|------|
+| 사용자 정의 예외 4종 추가 | `HWPProcessingError`, `ImageExtractionError`, `DocumentGenerationError`, `XLSXProcessingError` |
+| bare `except:` 13곳 → 구체적 예외 타입으로 교체 | `except Exception as e: logger.error(...)` 패턴 |
+| `import logging` + `logger = logging.getLogger(__name__)` | 모듈 레벨 로거 설정 |
+
+### Phase 1-B — QThread 전환 + 로그 UI 개선
+
+| 항목 | 내용 |
+|------|------|
+| `threading.Thread` → `Worker(QThread)` 전환 | 9곳 교체, 스레드 안전성 확보 |
+| `log_message()` HTML 색상 + 타임스탬프 | 성공(녹색) / 오류(빨간색) / 기본(흰색) |
+| `self._current_worker` 참조 추가 | 중복 실행 방지 기반 마련 |
+
+### Phase 1-C — config.yaml 설정 파일 시스템
+
+| 항목 | 내용 |
+|------|------|
+| `src/config.py` 신규 작성 | `Config` 클래스: `get()`, `get_int()`, `set()`, `save()` |
+| `config.yaml` 생성 | 탭별 경로 15개 + UI 창 위치/크기 |
+| 창 종료 시 자동 저장 | `closeEvent()` 오버라이드 |
+| `QLineEdit` 초기값 config 기반으로 교체 | 하드코딩 경로 제거 |
+
+### 신규 기능 — 신규 이력카드 발행 다이얼로그 개선
+
+| 항목 | 내용 |
+|------|------|
+| DB 직전 항목 표시 바 추가 | 파일명 + 품명을 상단에 표시 (XLSX 변경 시 자동 갱신) |
+| File name 편집 가능 | QLabel → QLineEdit 변경, 자동생성값 기입 후 수정 가능 |
+| `NewCardManager.get_last_entry()` 추가 | DB 마지막 행 파일명/품명 반환 |
+
+---
+
 ## 버그 수정 이력
 
 | 날짜 | 현상 | 원인 | 수정 |
@@ -147,6 +187,11 @@
 | 2026-04-13 | PDF 병합 "pypdf 미설치" 오류 | pypdf 6.x에서 `PdfMerger` API 제거됨 | `PdfWriter`+`PdfReader` 방식으로 교체 |
 | 2026-04-13 | 19-003.docx 금형 사진 누락 | 구버전 코드로 생성된 파일 | 최신 코드로 재생성 |
 | 2026-04-13 | 이력 저장 시 XLSX 기존값 미삭제 | `update_xlsx_reason()`에서 셀 초기화 누락 | 쓰기 전 셀 값 `None`으로 초기화 후 갱신 |
+| 2026-04-14 | `HWPProcessor.process()` callback 오류 | 메서드 시그니처에 `callback` 파라미터 누락 | `process()` 및 `extract_rows_from_hwp()`에 `callback=None` 추가 |
+| 2026-04-14 | 이미지 저장 시 파일명 끝에 `_` 붙음 (예: `MR14 CASE_`) | 도번 없을 때 `f"{품명}_{도번}"` 평가 시 `and` 조건 때문에 serial fallback 발생 | `extract_images()` 3-way 조건으로 수정 (品名+図番 / 品名만 / serial) |
+| 2026-04-14 | `find_image_for_output` trailing underscore 파일명 탐색 실패 | `MR14 CASE_`로 검색 시 `MR14 CASE.jpg` 못 찾음 | `rstrip('_- ')` 제거 후 재탐색 추가 |
+| 2026-04-14 | GATE型式/使用機械/契約日가 承認日 값 가져옴 | 값 비어있을 때 lookahead가 next_labels를 skip하고 계속 탐색 | 다음 라벨 도달 시 break (skip → break) |
+| 2026-04-14 | 이력관리 'Word에 반영' 후 이미지 누락 | `apply_to_word()`가 金型写真 컬럼만 탐색 후 즉시 종료 | DocumentFiller.process()와 동일한 4단계 fallback chain 적용 |
 
 ---
 

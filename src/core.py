@@ -4,6 +4,7 @@
 import argparse
 import csv
 import json
+import logging
 import re
 import shutil
 import zlib
@@ -19,6 +20,31 @@ from docx.shared import Cm, Pt
 from openpyxl import Workbook, load_workbook
 from PIL import Image
 import sys
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 사용자 정의 예외
+# ============================================================================
+class HWPProcessingError(Exception):
+    """HWP 파일 처리 중 발생하는 오류"""
+    pass
+
+
+class ImageExtractionError(Exception):
+    """이미지 추출 중 발생하는 오류"""
+    pass
+
+
+class DocumentGenerationError(Exception):
+    """Word 문서 생성 중 발생하는 오류"""
+    pass
+
+
+class XLSXProcessingError(Exception):
+    """XLSX 파일 처리 중 발생하는 오류"""
+    pass
 
 
 # ============================================================================
@@ -86,7 +112,7 @@ class HWPTextExtractor:
                 else:
                     try:
                         result.append(chr(char_code))
-                    except:
+                    except (ValueError, OverflowError):
                         pass
 
         return ''.join(result).strip()
@@ -122,7 +148,7 @@ class HWPDataExtractor:
                     try:
                         section_data = ole.openstream(stream_path).read()
                         break
-                    except:
+                    except Exception:
                         pass
 
             if section_data is None:
@@ -131,7 +157,7 @@ class HWPDataExtractor:
 
             try:
                 decompressed = zlib.decompress(section_data, -15)
-            except:
+            except zlib.error:
                 decompressed = section_data
 
             extractor = HWPTextExtractor(decompressed)
@@ -141,7 +167,7 @@ class HWPDataExtractor:
             ole.close()
 
         except Exception as e:
-            pass
+            logger.warning(f"HWP 데이터 추출 실패: {self.filepath} - {e}")
 
         return row
 
@@ -176,8 +202,9 @@ class HWPDataExtractor:
                     elif '金型価' in label or '金型価格' in label:
                         row['U'] = value
 
-        # 다음 라벨 목록 (헤더 라벨들)
+        # 다음 라벨 목록 (헤더 라벨들) — 경계 역할: 이 라벨이 나오면 앞 필드 탐색 중단
         next_labels = {
+            '保管会社名', '作成日子', '管理番号',
             '分 類', '分類', '現 保管処', '現保管処', '製作処', 'MODEL名', 'MODEL',
             '量産処', '品 名', '品名', '図番番号', '図番', '金型規格', '規格',
             '金型材質', 'BASE', 'CORE', 'CAVITY 数', 'CAVITY', '金型寿命',
@@ -189,7 +216,16 @@ class HWPDataExtractor:
         while i < len(form_texts):
             text = form_texts[i]
 
-            if text == '分 類' or text == '分類':
+            if text == '管理番号':
+                for j in range(i + 1, min(i + 5, len(form_texts))):
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break
+                    if val.strip():
+                        row['D'] = val
+                        break
+
+            elif text == '分 類' or text == '分類':
                 # 다음 라벨이 아닌 첫 번째 값 찾기
                 for j in range(i + 1, min(i + 5, len(form_texts))):
                     if form_texts[j].strip() and form_texts[j] not in next_labels:
@@ -291,20 +327,29 @@ class HWPDataExtractor:
 
             elif text == 'GATE 型式' or text == 'GATE':
                 for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['Q'] = form_texts[j]
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break  # 다음 라벨 경계에서 중단 (빈 값이면 그냥 비워둠)
+                    if val.strip():
+                        row['Q'] = val
                         break
 
             elif text == '使用機械' or text == '機械':
                 for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['R'] = form_texts[j]
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break
+                    if val.strip():
+                        row['R'] = val
                         break
 
             elif text == '契約日':
                 for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['S'] = form_texts[j]
+                    val = form_texts[j]
+                    if val in next_labels:
+                        break
+                    if val.strip():
+                        row['S'] = val
                         break
 
             elif text == '承認日':
@@ -341,7 +386,7 @@ class HWPProcessor:
     ]
 
     @classmethod
-    def extract_rows_from_hwp(cls, input_dir: Path) -> List[List[str]]:
+    def extract_rows_from_hwp(cls, input_dir: Path, callback=None) -> List[List[str]]:
         hwp_files = sorted(input_dir.glob("*.hwp"))
         if not hwp_files:
             raise FileNotFoundError(f"No HWP files found in: {input_dir}")
@@ -349,7 +394,11 @@ class HWPProcessor:
         rows: List[List[str]] = []
         total = len(hwp_files)
         for idx, hwp_file in enumerate(hwp_files, start=1):
-            print(f"[{idx}/{total}] extracting: {hwp_file.name}")
+            msg = f"[{idx}/{total}] 추출 중: {hwp_file.name}"
+            if callback:
+                callback(msg)
+            else:
+                print(msg)
             extractor = HWPDataExtractor(str(hwp_file))
             row_data = extractor.extract()
             row_values = [row_data.get(chr(65 + i), "") for i in range(29)]
@@ -372,16 +421,19 @@ class HWPProcessor:
         wb.save(output_xlsx)
 
     @classmethod
-    def process(cls, input_dir: Path, output_xlsx: Path) -> None:
+    def process(cls, input_dir: Path, output_xlsx: Path, callback=None) -> None:
         """Main entry point: HWP folder → XLSX file"""
         if not input_dir.exists():
             raise FileNotFoundError(f"input-dir not found: {input_dir}")
 
-        rows = cls.extract_rows_from_hwp(input_dir)
+        rows = cls.extract_rows_from_hwp(input_dir, callback=callback)
         cls.save_xlsx(rows, output_xlsx)
 
-        print(f"Saved: {output_xlsx}")
-        print(f"Rows: {len(rows)}")
+        msg = f"✓ 저장 완료: {output_xlsx} ({len(rows)}행)"
+        if callback:
+            callback(msg)
+        else:
+            print(msg)
 
 
 # ============================================================================
@@ -411,8 +463,8 @@ class HWPImageExtractor:
             row_data = extractor.extract()
             self.product_name = self.sanitize_filename(row_data.get('J', '').strip())
             self.drawing_no = self.sanitize_filename(row_data.get('K', '').strip())
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"HWP 메타데이터 추출 실패 (파일명으로 대체): {hwp_path} - {e}")
 
     def sanitize_filename(self, text):
         """파일명으로 사용할 수 없는 문자를 '_'로 치환"""
@@ -428,10 +480,10 @@ class HWPImageExtractor:
         """Try to decompress zlib compressed data"""
         try:
             return zlib.decompress(data, -15)
-        except:
+        except zlib.error:
             try:
                 return zlib.decompress(data)
-            except:
+            except zlib.error:
                 return data
 
     def try_fix_image(self, data):
@@ -439,13 +491,14 @@ class HWPImageExtractor:
             img = Image.open(BytesIO(data))
             img.verify()
             return data, None
-        except:
+        except Exception:
             try:
                 img = Image.open(BytesIO(data))
                 output = BytesIO()
                 img.convert('RGB').save(output, format='JPEG', quality=95)
                 return output.getvalue(), 'jpg'
-            except:
+            except Exception as e:
+                logger.debug(f"이미지 변환 실패 (스킵): {e}")
                 return None, 'error'
 
     def extract_images(self):
@@ -457,7 +510,8 @@ class HWPImageExtractor:
 
         try:
             ole = olefile.OleFileIO(self.hwp_path)
-        except:
+        except (olefile.Error, OSError) as e:
+            logger.warning(f"OLE 파일 열기 실패: {self.hwp_path} - {e}")
             return 0
 
         extracted_count = 0
@@ -490,7 +544,13 @@ class HWPImageExtractor:
 
                         image_index = extracted_count + 1
                         # 품명_도번 형식으로 생성 (예: VFD HOLDER_1072001450.jpg)
-                        base_filename = f"{self.product_name}_{self.drawing_no}" if self.product_name and self.drawing_no else self.file_name
+                        # 도번이 없으면 품명만으로 저장 (trailing underscore 없이)
+                        if self.product_name and self.drawing_no:
+                            base_filename = f"{self.product_name}_{self.drawing_no}"
+                        elif self.product_name:
+                            base_filename = self.product_name
+                        else:
+                            base_filename = self.file_name
                         if image_index == 1:
                             output_filename = f"{base_filename}.{final_fmt}"
                         else:
@@ -503,12 +563,14 @@ class HWPImageExtractor:
 
                         extracted_count += 1
 
-                    except:
+                    except Exception as e:
+                        logger.debug(f"BinData 스트림 처리 실패 (스킵): {e}")
                         continue
 
             ole.close()
 
-        except:
+        except Exception as e:
+            logger.error(f"이미지 추출 중 오류: {self.hwp_path} - {e}")
             return 0
 
         return extracted_count
@@ -735,8 +797,21 @@ class DocumentFiller:
             try:
                 # 파일명에 공백이 있을 수 있으니 escape 처리
                 matches.extend(img_dir.glob(f"*{search_stem}*{ext}"))
-            except:
+            except (OSError, ValueError):
                 pass
+
+        # trailing underscore/hyphen 제거 후 재시도
+        # 예: XLSX에 "MR14 CASE_"로 저장된 경우 → "MR14 CASE"로 검색
+        clean_stem = search_stem.rstrip('_- ')
+        if clean_stem and clean_stem != search_stem:
+            for ext in cls.IMAGE_EXTS:
+                try:
+                    p = img_dir / f"{clean_stem}{ext}"
+                    if p.exists():
+                        return p
+                    matches.extend(img_dir.glob(f"*{clean_stem}*{ext}"))
+                except (OSError, ValueError):
+                    pass
 
         if matches:
             # 연번이 없는 파일 우선 (예: "xxx_yyy.jpg" > "xxx_yyy_2.jpg")
@@ -816,8 +891,15 @@ class DocumentFiller:
         return rows
 
     @classmethod
-    def process(cls, xlsx_path: Path, template_path: Path, out_dir: Path, img_dir: Path, limit: int = 0) -> None:
+    def process(cls, xlsx_path: Path, template_path: Path, out_dir: Path, img_dir: Path,
+                limit: int = 0, callback=None) -> None:
         """Main entry point: XLSX + Template → DOCX files with images"""
+        def _log(msg):
+            if callback:
+                callback(msg)
+            else:
+                print(msg)
+
         if not xlsx_path.exists():
             raise FileNotFoundError(f"XLSX not found: {xlsx_path}")
         if not template_path.exists():
@@ -827,7 +909,7 @@ class DocumentFiller:
         if limit > 0:
             rows = rows[:limit]
         if not rows:
-            print("No rows in XLSX")
+            _log("XLSX에 처리할 행이 없습니다.")
             return
 
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -853,10 +935,16 @@ class DocumentFiller:
 
             # 2. "金型写真"으로 못 찾으면 XLSX의 도번으로 시도
             if not image_path:
-                # 도번 컬럼 찾기: aliases 사용
                 drawing_no = cls.value_by_aliases(nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
                 if drawing_no:
                     image_path = cls.find_image_for_output(img_dir, drawing_no)
+
+            # 2.5. 품명만으로 검색 (도번 없는 경우: XLSX에 "品名_"처럼 저장된 상황 대비)
+            if not image_path:
+                product_name = cls.value_by_aliases(nrow, ["品  名", "品 名", "product_name", "품명"])
+                if product_name:
+                    sanitized_pname = re.sub(r'[<>:"/\\|?*]', '_', product_name.strip())
+                    image_path = cls.find_image_for_output(img_dir, sanitized_pname)
 
             # 3. 도번으로도 못 찾으면 out_name(연번)으로 시도
             if not image_path:
@@ -876,15 +964,11 @@ class DocumentFiller:
             image_updates[idx] = image_path.name if image_path else ""
 
             img_status = "OK" if image_path else "NONE"
-            try:
-                print(f"[{idx}/{total}] saved: {out_name}.docx (replaced={replaced}, image={img_status}, inserted={inserted})")
-            except:
-                # Handle encoding issues with image filenames
-                print(f"[{idx}/{total}] saved: {out_name}.docx (image={img_status}, inserted={inserted})")
+            _log(f"[{idx}/{total}] 저장: {out_name}.docx (치환={replaced}, 이미지={img_status})")
 
         # XLSX의 "金型写真" 컬럼 업데이트
         cls._update_xlsx_images(xlsx_path, image_updates)
-        print(f"\nXLSX updated with actual image filenames")
+        _log(f"✓ XLSX 이미지 컬럼 업데이트 완료")
 
     @classmethod
     def _update_xlsx_images(cls, xlsx_path: Path, image_updates: Dict[int, str]) -> None:
@@ -1258,13 +1342,36 @@ class MaintenanceHistoryManager:
 
             image_name = target_row.get("金型写真", "").strip()
             image_path = None
+
+            # 1. XLSX의 金型写真(품명_도번)으로 시도
             if image_name:
                 image_path = DocumentFiller.find_image_for_output(img_dir, image_name)
-                if not image_path:
-                    # 신규 발행 첨부 이미지는 docx와 같은 디렉토리의 .data/ 에 저장됨
-                    image_path = DocumentFiller.find_image_for_output(
-                        docx_path.parent / ".data", image_name
-                    )
+
+            # 2. 図番番号로 시도
+            if not image_path:
+                drawing_no = DocumentFiller.value_by_aliases(
+                    nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
+                if drawing_no:
+                    image_path = DocumentFiller.find_image_for_output(img_dir, drawing_no)
+
+            # 2.5. 品名으로 시도 (도번 없는 경우)
+            if not image_path:
+                product_name = DocumentFiller.value_by_aliases(
+                    nrow, ["品  名", "品 名", "product_name", "품명"])
+                if product_name:
+                    sanitized_pname = re.sub(r'[<>:"/\\|?*]', '_', product_name.strip())
+                    image_path = DocumentFiller.find_image_for_output(img_dir, sanitized_pname)
+
+            # 3. out_name(연번)으로 시도
+            if not image_path:
+                image_path = DocumentFiller.find_image_for_output(img_dir, stem)
+
+            # 4. docx 인접 .data/ 검색 (신규 발행 첨부 이미지)
+            if not image_path:
+                search_name = image_name or stem
+                image_path = DocumentFiller.find_image_for_output(
+                    docx_path.parent / ".data", search_name)
+
             DocumentFiller.insert_images_by_token(doc, image_path)
             doc.save(str(docx_path))
 
@@ -1303,6 +1410,18 @@ class NewCardManager:
             prefix = date.today().strftime("%y") + "-"
 
         return f"{prefix}{max_serial + 1:03d}"
+
+    @classmethod
+    def get_last_entry(cls, xlsx_path: Path) -> Tuple[str, str]:
+        """DB 마지막 행의 파일명과 품명 반환 (신규 발행 다이얼로그 표시용)"""
+        rows = DocumentFiller.load_rows_from_xlsx(xlsx_path)
+        if not rows:
+            return "", ""
+        last = rows[-1]
+        file_name = last.get("File name", "").strip()
+        nrow = DocumentFiller.row_norm_map(last)
+        product = DocumentFiller.value_by_aliases(nrow, ["品  名", "品 名", "품명"])
+        return file_name, (product.strip() if product else "")
 
     @classmethod
     def sanitize(cls, text: str) -> str:

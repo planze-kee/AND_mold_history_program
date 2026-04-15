@@ -3,3 +3,4 @@ openpyxl==3.1.5
 olefile==0.46
 python-docx==0.8.11
 Pillow==12.2.0
+PyYAML==6.0.2

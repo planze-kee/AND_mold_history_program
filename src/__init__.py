@@ -11,9 +11,11 @@ from .core import (
     NewCardManager
 )
 
+from .config import Config
 from .pdf import DocxToPdfConverter, docx_to_pdf, merge_pdfs, convert_and_merge
 
 __all__ = [
+    'Config',
     'HWPProcessor',
     'HWPImageExtractor',
     'DocumentFiller',
