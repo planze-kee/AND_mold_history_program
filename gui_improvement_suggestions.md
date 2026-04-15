@@ -25,7 +25,7 @@
 
 ---
 
-## ✅ 완료 현황 (2026-04-14, feature/phase1-core-improvements)
+## ✅ 완료 현황 (2026-04-15, feature/phase1-core-improvements)
 
 | 항목 | 상태 | 내용 |
 |------|------|------|
@@ -34,17 +34,18 @@
 | **2.3 로그 기능 강화** | ✅ 완료 | 타임스탬프 추가, 성공(녹색)/오류(빨간색)/기본(흰색) HTML 색상 구분 |
 | **2.4 창 위치/크기 저장** | ✅ 완료 | `closeEvent()` 오버라이드로 종료 시 config.yaml에 자동 저장, 다음 실행 시 복원 |
 | **신규 이력카드 발행 UX 개선** | ✅ 완료 | DB 직전 항목(파일명/품명) 표시 바 추가, File name 편집 가능 QLineEdit 전환 |
+| **2.1 진행률 표시** | ✅ 완료 | `[idx/total]` regex 파싱으로 progress bar 실시간 갱신 (HWP·이미지·DOCX·동기화), core.py 수정 없음 |
+| **6.2 키보드 단축키** | ✅ 완료 | `Ctrl+R`/`F5` (현재 탭 실행), `Ctrl+L` (로그 지우기), `Ctrl+Q` (종료) |
+| **작업 취소 버튼** | ✅ 완료 | 로그 헤더에 `■ 취소` 버튼 추가, `_TaskCancelled` 예외로 현재 파일 완료 후 안전 중단 |
 
 ### 미완료 항목
 
 | 항목 | 우선순위 | 비고 |
 |------|---------|------|
 | 1.1 비즈니스 로직/UI 분리 (MVC) | Low | main.py 1,400줄+, 기능 안정 후 진행 권장 |
-| 2.1 진행률 표시 (progress_bar 실활용) | Medium | core.py callback에 progress % 전달 필요 |
 | 2.5 드래그 앤 드롭 | Medium | 파일 찾기 UX 개선 |
 | 3.1 일괄 작업 마법사 | Low | 단계별 자동 실행 |
 | 3.5 DB 검색/필터링 | Low | XLSX 직접 조회 UI |
-| 6.2 키보드 단축키 | Low | Ctrl+R (실행), Ctrl+L (로그 지우기) 등 |
 
 ---
 
@@ -618,7 +619,9 @@ QShortcut(QKeySequence("Ctrl+R"), self, self.run_current_task)
 - [x] 로깅 시스템 개선 ✅ 2026-04-14 (타임스탬프 + 색상)
 
 ### Phase 2: UX 개선 (1-2주)
-- [ ] 진행률 표시 개선
+- [x] 진행률 표시 개선 ✅ 2026-04-15 (regex 파싱, core.py 수정 없음)
+- [x] 키보드 단축키 ✅ 2026-04-15 (Ctrl+R/F5/Ctrl+L/Ctrl+Q)
+- [x] 작업 취소 버튼 ✅ 2026-04-15 (_TaskCancelled 예외 기반 안전 중단)
 - [ ] 드래그 앤 드롭 지원
 - [ ] 프리뷰 기능 추가
 - [ ] 반응형 레이아웃

@@ -2,6 +2,7 @@
 금형이력카드 처리 프로그램 - PyQt GUI
 """
 import html as _html
+import re
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -12,10 +13,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QFileDialog, QTextEdit, QTabWidget,
     QGroupBox, QRadioButton, QButtonGroup, QSpinBox, QMessageBox,
     QProgressBar, QDialog, QCheckBox, QListWidget, QSplitter,
-    QFormLayout, QDialogButtonBox
+    QFormLayout, QDialogButtonBox, QShortcut
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
-from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter
+from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter, QKeySequence
 
 from src.config import Config
 from src.core import (
@@ -82,7 +83,7 @@ class NewCardDialog(QDialog):
         self.last_entry_label = QLabel("직전 항목: 로딩 중...")
         self.last_entry_label.setStyleSheet(
             "background-color: #F5F5F5; border: 1px solid #CCCCCC; border-radius: 3px;"
-            " padding: 4px 8px; color: #555555; font-size: 11px;")
+            " padding: 4px 8px; color: #555555; font-size: 12px;")
         main_layout.addWidget(self.last_entry_label)
 
         # File name: 자동생성 표시 + 사용자 직접 입력
@@ -258,6 +259,10 @@ class NewCardDialog(QDialog):
         return self.result_data
 
 
+class _TaskCancelled(Exception):
+    """사용자가 취소 버튼을 눌렀을 때 callback에서 발생시키는 예외"""
+
+
 # ============================================================================
 # 메인 윈도우
 # ============================================================================
@@ -268,10 +273,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = Config()
         self._current_worker: Optional[Worker] = None  # QThread 참조 유지
+        self._cancel_requested = False
         self.signals = WorkerSignals()
         self.signals.log.connect(self.log_message)
         self.signals.error.connect(self.show_error)
         self.signals.finished.connect(self.on_task_finished)
+        self.signals.progress.connect(self.update_progress)
         self.init_ui()
 
     def _start_worker(self, task_func):
@@ -306,21 +313,35 @@ class MainWindow(QMainWindow):
         top_layout.addStretch()
         main_layout.addLayout(top_layout)
 
-        tabs = QTabWidget()
-        tabs.addTab(self.create_docx_tab(), "문서 생성/동기화")
-        tabs.addTab(self.create_history_tab(), "이력 관리")
-        tabs.addTab(self.create_pdf_tab(), "PDF 변환/병합")
-        tabs.addTab(self.create_hwp_tab(), "HWP to 엑셀")
-        tabs.addTab(self.create_image_tab(), "이미지 추출")
-        main_layout.addWidget(tabs)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.create_docx_tab(), "문서 생성/동기화")
+        self.tabs.addTab(self.create_history_tab(), "이력 관리")
+        self.tabs.addTab(self.create_pdf_tab(), "PDF 변환/병합")
+        self.tabs.addTab(self.create_hwp_tab(), "HWP to 엑셀")
+        self.tabs.addTab(self.create_image_tab(), "이미지 추출")
+        main_layout.addWidget(self.tabs)
 
+        log_header = QHBoxLayout()
         log_label = QLabel("작업 로그:")
         log_label.setFont(QFont("Arial", 9, QFont.Bold))
+        log_header.addWidget(log_label)
+        log_header.addStretch()
+        self.cancel_btn = QPushButton("■ 취소")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setMaximumWidth(65)
+        self.cancel_btn.setMaximumHeight(20)
+        self.cancel_btn.setStyleSheet(
+            "QPushButton { color: #C62828; font-weight: bold; border: 1px solid #C62828;"
+            " border-radius: 3px; padding: 0px 6px; }"
+            "QPushButton:hover { background-color: #FFEBEE; }"
+            "QPushButton:disabled { color: #BDBDBD; border-color: #BDBDBD; }")
+        self.cancel_btn.clicked.connect(self.cancel_task)
+        log_header.addWidget(self.cancel_btn)
+        main_layout.addLayout(log_header)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(120)
         self.log_text.setMinimumHeight(100)
-        main_layout.addWidget(log_label)
         main_layout.addWidget(self.log_text, 1)
 
         self.progress_bar = QProgressBar()
@@ -330,8 +351,16 @@ class MainWindow(QMainWindow):
 
         central.setLayout(main_layout)
 
+        # ── 키보드 단축키 ──────────────────────────────────────────────────
+        QShortcut(QKeySequence("Ctrl+R"), self, self.run_current_task)
+        QShortcut(QKeySequence("Ctrl+L"), self, self.clear_log)
+        QShortcut(QKeySequence("Ctrl+Q"), self, self.close)
+        QShortcut(QKeySequence("F5"),     self, self.run_current_task)
+
     def _logo_candidates(self):
         return [
+            Path(__file__).resolve().parent / "data" / "templates" / "AND-LOGO.png",
+            Path("data/templates/AND-LOGO.png"),
             Path("c:/Users/UKY/Downloads/AND-LOGO-1.png"),
             Path("img/AND-LOGO-1.png"),
             Path(__file__).resolve().parent / "img" / "AND-LOGO-1.png",
@@ -718,6 +747,10 @@ class MainWindow(QMainWindow):
         self.sync_run_btn.setEnabled(False)
         self.new_card_btn.setEnabled(False)
         self.pdf_run_btn.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self._cancel_requested = False
+        self.cancel_btn.setEnabled(True)
 
     def enable_buttons(self):
         self.hwp_run_btn.setEnabled(True)
@@ -726,6 +759,25 @@ class MainWindow(QMainWindow):
         self.sync_run_btn.setEnabled(True)
         self.new_card_btn.setEnabled(True)
         self.pdf_run_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+    def cancel_task(self):
+        """취소 버튼 — 플래그를 세워 다음 callback 호출 시 작업 중단"""
+        self._cancel_requested = True
+        self.cancel_btn.setEnabled(False)
+        self.log_message("⚠ 취소 요청 — 현재 파일 완료 후 중단됩니다...")
+
+    def _make_progress_cb(self):
+        """[idx/total] 파싱 + 취소 체크를 포함한 callback 생성"""
+        def cb(msg):
+            if self._cancel_requested:
+                raise _TaskCancelled()
+            self.signals.log.emit(msg)
+            m = re.match(r'\[(\d+)/(\d+)\]', msg)
+            if m:
+                pct = int(int(m.group(1)) / int(m.group(2)) * 100)
+                self.signals.progress.emit(pct)
+        return cb
 
     def log_message(self, msg):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -752,8 +804,33 @@ class MainWindow(QMainWindow):
         self.log_message(f"✗ 오류: {error_msg}")
         QMessageBox.critical(self, "오류", error_msg)
 
+    def update_progress(self, value: int):
+        """progress signal 수신 → 진행률 바 갱신 (0~100) / -1이면 숨김"""
+        if value < 0:
+            self.progress_bar.setVisible(False)
+        else:
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(value)
+
+    def clear_log(self):
+        """로그 창 전체 지우기 (Ctrl+L)"""
+        self.log_text.clear()
+
+    def run_current_task(self):
+        """현재 선택된 탭의 실행 버튼 동작 (Ctrl+R)"""
+        tab_actions = {
+            0: self.run_docx_generation,
+            2: self.run_pdf,
+            3: self.run_hwp_conversion,
+            4: self.run_image_extraction,
+        }
+        func = tab_actions.get(self.tabs.currentIndex())
+        if func:
+            func()
+
     def on_task_finished(self):
         self.enable_buttons()
+        self.progress_bar.setVisible(False)
 
     def closeEvent(self, event):
         """종료 시 현재 경로 설정과 창 크기를 config.yaml에 저장"""
@@ -801,10 +878,10 @@ class MainWindow(QMainWindow):
 
         def task():
             try:
-                HWPProcessor.process(
-                    input_dir, output_file,
-                    callback=lambda msg: self.signals.log.emit(msg))
+                HWPProcessor.process(input_dir, output_file, callback=self._make_progress_cb())
                 self.signals.log.emit(f"✓ HWP → XLSX 변환 완료: {output_file.name}")
+            except _TaskCancelled:
+                self.signals.log.emit("⚠ 작업이 취소되었습니다.")
             except Exception as e:
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
@@ -822,14 +899,21 @@ class MainWindow(QMainWindow):
         def task():
             try:
                 hwp_files = sorted(input_dir.glob("*.hwp"))
-                total = 0
-                for hwp_file in hwp_files:
+                file_count = len(hwp_files)
+                total_images = 0
+                for i, hwp_file in enumerate(hwp_files):
+                    if self._cancel_requested:
+                        self.signals.log.emit("⚠ 작업이 취소되었습니다.")
+                        break
                     extractor = HWPImageExtractor(str(hwp_file), str(output_dir))
                     n = extractor.extract_images()
                     if n:
-                        total += n
+                        total_images += n
                         self.signals.log.emit(f"  {hwp_file.name}: {n}개 추출")
-                self.signals.log.emit(f"✓ 이미지 추출 완료: 총 {total}개")
+                    if file_count > 0:
+                        self.signals.progress.emit(int((i + 1) / file_count * 100))
+                else:
+                    self.signals.log.emit(f"✓ 이미지 추출 완료: 총 {total_images}개")
             except Exception as e:
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
@@ -854,8 +938,10 @@ class MainWindow(QMainWindow):
             try:
                 DocumentFiller.process(
                     xlsx_file, template, output_dir, img_dir, limit,
-                    callback=lambda msg: self.signals.log.emit(msg))
+                    callback=self._make_progress_cb())
                 self.signals.log.emit("✓ DOCX 생성 완료")
+            except _TaskCancelled:
+                self.signals.log.emit("⚠ 작업이 취소되었습니다.")
             except Exception as e:
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()
@@ -879,8 +965,10 @@ class MainWindow(QMainWindow):
             try:
                 DocxSyncManager.sync(
                     xlsx_file, template, output_dir, img_dir,
-                    callback=lambda msg: self.signals.log.emit(msg))
+                    callback=self._make_progress_cb())
                 self.signals.log.emit("✓ 동기화 완료")
+            except _TaskCancelled:
+                self.signals.log.emit("⚠ 작업이 취소되었습니다.")
             except Exception as e:
                 self.signals.log.emit(f"✗ 오류: {e}")
             self.signals.finished.emit()

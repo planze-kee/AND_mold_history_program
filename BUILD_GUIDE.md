@@ -156,7 +156,7 @@ pyinstaller --onefile --windowed --icon=app.ico main.py
 **원인**: PyInstaller가 설치되지 않았음
 **해결**:
 ```bash
-pip install PyInstaller==6.1.0
+pip install PyInstaller==6.19.0
 ```
 
 ### Q: "EXE 파일이 실행되지 않음"
@@ -170,7 +170,7 @@ pip install PyInstaller==6.1.0
    금형이력카드프로그램.exe
    ```
 
-### Q: EXE 파일 크기가 너무 큼 (200MB+)
+### Q: EXE 파일 크기가 너무 큼 (1GB+)
 **원인**: PyInstaller가 불필요한 라이브러리도 포함함
 **해결**: 기본 설정으로 정상 (첫 실행 시 임시 압축 해제)
 
@@ -207,7 +207,7 @@ GitHub Actions 등에서 자동 빌드 설정 가능
 
 | 항목 | 예상값 |
 |------|--------|
-| EXE 파일 크기 | 80~150MB |
+| EXE 파일 크기 | ~1.2GB |
 | 빌드 시간 | 30~60초 |
 | 첫 실행 시간 | 3~5초 (압축 해제) |
 | 이후 실행 시간 | 1~2초 |
@@ -235,5 +235,5 @@ GitHub Actions 등에서 자동 빌드 설정 가능
 
 ---
 
-**마지막 수정**: 2026-04-10  
-**버전**: 1.0
+**마지막 수정**: 2026-04-15  
+**버전**: 2.1

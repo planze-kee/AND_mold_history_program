@@ -7,4 +7,7 @@ Pillow==12.2.0
 PyYAML==6.0.2
 
 # EXE 빌드에 필요한 패키지
-PyInstaller==6.1.0
+PyInstaller==6.19.0
+
+# 테스트
+pytest==9.0.3

@@ -139,6 +139,36 @@
 
 ---
 
+## v2.1 — 코드 품질 개선 및 EXE 배포 (2026-04-15)
+
+**브랜치**: `feature/phase1-core-improvements`
+
+### 완료 항목 (core_improvement_suggestions.md 전체)
+
+| 항목 | 내용 |
+|------|------|
+| 1.2 상수화 | `src/constants.py` 신규 — `HWPConstants`, `DocumentConstants`, `PathConstants`, `HWPFormConstants` 4개 클래스 |
+| 1.3 함수 분해 | `HWPFieldExtractor` 클래스 추출 (`_apply_pattern1/2`, `_find_*`, `_extract_mold_*` 9개 메서드) |
+| 3.1 데이터 검증 | `MoldHistoryCard` dataclass — `validate()`, `from_dict()`, `to_dict()` |
+| 5.1 단위 테스트 | `test/test_core.py` 65개 테스트 — `TestHWPTextExtractor`, `TestHWPFieldExtractor`, `TestDocumentFiller`, `TestMoldHistoryCard`, `TestConstants`, `TestImageCache` |
+| 1.4 타입 힌팅 | `callback: Optional[Callable[[str], None]]` 8곳, `HWPImageExtractor`, `DocxSyncManager` 전체 타입 완비 |
+| 2.1 멀티프로세싱 | `_extract_hwp_worker` 모듈 레벨 함수 + `ProcessPoolExecutor` (5개 이상 HWP 시 자동 병렬화) |
+| 2.2 ImageCache | `ImageCache` 클래스 — O(1) 이미지 조회, stem/sanitized/연번제거 3단계 인덱싱, 행 루프 앞에서 1회 빌드 |
+
+### 버그 수정
+
+| 현상 | 원인 | 수정 |
+|------|------|------|
+| DB 업데이트+동기화 후 Word 이미지 누락 | `DocxSyncManager.sync()`에 2단계 이후 fallback 없음 | `apply_to_word()`와 동일한 4단계 fallback chain 적용 |
+
+### 배포
+
+- PyInstaller 6.19.0으로 onefile EXE 빌드 (~1.2GB)
+- `금형이력카드프로그램_v2.1.zip` 생성: EXE + 빈 폴더 구조(YES 데이터 제외)
+- `requirements-build.txt`: PyInstaller 6.19.0 + pytest 9.0.3
+
+---
+
 ## Phase 1 — 코드 품질 개선 (2026-04-14)
 
 **브랜치**: `feature/phase1-core-improvements`  

@@ -8,11 +8,12 @@ import logging
 import re
 import shutil
 import zlib
+from dataclasses import dataclass, field
 import struct
 import olefile
 from datetime import datetime, date
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from io import BytesIO
 
 from docx import Document
@@ -22,6 +23,8 @@ from PIL import Image
 import sys
 
 logger = logging.getLogger(__name__)
+
+from .constants import HWPConstants, DocumentConstants, PathConstants, HWPFormConstants
 
 
 # ============================================================================
@@ -53,7 +56,7 @@ class XLSXProcessingError(Exception):
 class HWPTextExtractor:
     """Extract text from HWP5 BodyText stream"""
 
-    PARA_TEXT = 67  # 0x43
+    PARA_TEXT = HWPConstants.PARA_TEXT_TAG
 
     def __init__(self, section_data: bytes):
         self.section_data = section_data
@@ -119,6 +122,155 @@ class HWPTextExtractor:
 
 
 # ============================================================================
+# HWP 필드 추출기 (HWPDataExtractor 내부 로직 분리)
+# ============================================================================
+class HWPFieldExtractor:
+    """HWP 폼 텍스트 리스트에서 필드별 값을 추출하는 클래스.
+
+    _extract_fields()의 복잡한 파싱 로직을 역할별 메서드로 분리하여
+    가독성과 테스트 가능성을 높인다.
+    """
+
+    def __init__(self, form_texts: List[str]):
+        self.texts = form_texts
+        self.boundary = HWPFormConstants.BOUNDARY_LABELS
+        self.lookahead = HWPFormConstants.FIELD_LOOKAHEAD
+        self._size_pattern = re.compile(HWPConstants.__dict__.get('SIZE_PATTERN', r'\d{1,5}x\d{1,5}x\d{1,5}'), re.IGNORECASE)
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+    def extract(self, row: Dict[str, str]) -> None:
+        """폼 텍스트 전체에서 모든 필드를 추출하여 row에 기록"""
+        self._apply_pattern1(row)
+        self._apply_pattern2(row)
+
+    # ------------------------------------------------------------------
+    # Pattern 1: "라벨 : 값" 동일 라인 형식
+    # ------------------------------------------------------------------
+    def _apply_pattern1(self, row: Dict[str, str]) -> None:
+        for text in self.texts:
+            if ':' not in text:
+                continue
+            parts = text.split(':', 1)
+            if len(parts) != 2:
+                continue
+            label, value = parts[0].strip(), parts[1].strip()
+            for key_label, row_key in HWPFormConstants.INLINE_FIELD_MAP.items():
+                if key_label in label:
+                    row[row_key] = value
+                    break
+
+    # ------------------------------------------------------------------
+    # Pattern 2: 라벨 다음 줄에 값이 오는 형식
+    # ------------------------------------------------------------------
+    def _apply_pattern2(self, row: Dict[str, str]) -> None:
+        i = 0
+        while i < len(self.texts):
+            text = self.texts[i]
+
+            # 일반 다음줄 필드
+            if text in HWPFormConstants.NEXTLINE_FIELD_MAP:
+                row_key = HWPFormConstants.NEXTLINE_FIELD_MAP[text]
+                val = self._find_simple_next(i)
+                if val:
+                    row[row_key] = val
+
+            # 경계에서 break 처리하는 필드 (GATE/機械/契約日)
+            elif text in HWPFormConstants.BREAK_ON_BOUNDARY_FIELD_MAP:
+                row_key = HWPFormConstants.BREAK_ON_BOUNDARY_FIELD_MAP[text]
+                val = self._find_next_with_break(i)
+                if val:
+                    row[row_key] = val
+
+            # 承認日 — 年 포함 값만 수용
+            elif text == HWPFormConstants.APPROVAL_DATE_LABEL:
+                val = self._find_approval_date(i)
+                if val:
+                    row[HWPFormConstants.APPROVAL_DATE_KEY] = val
+
+            # 金型規格 — XxXxX 패턴 검사
+            elif text == HWPFormConstants.MOLD_SIZE_LABEL or text == HWPFormConstants.MOLD_SIZE_ALT_LABEL:
+                row[HWPFormConstants.MOLD_SIZE_KEY] = self._extract_mold_size(i)
+
+            # 金型材質 — BASE / CORE 추출
+            elif text == HWPFormConstants.MOLD_MATERIAL_LABEL:
+                base_val, core_val = self._extract_mold_material(i)
+                row[HWPFormConstants.MOLD_MATERIAL_BASE_KEY] = base_val
+                row[HWPFormConstants.MOLD_MATERIAL_CORE_KEY] = core_val
+
+            i += 1
+
+    # ------------------------------------------------------------------
+    # 헬퍼: 다음 줄 값 탐색
+    # ------------------------------------------------------------------
+    def _find_simple_next(self, label_idx: int) -> str:
+        """경계 라벨이 아닌 첫 번째 비어있지 않은 값을 반환"""
+        for j in range(label_idx + 1, min(label_idx + self.lookahead, len(self.texts))):
+            val = self.texts[j]
+            if val.strip() and val not in self.boundary:
+                return val
+        return ""
+
+    def _find_next_with_break(self, label_idx: int) -> str:
+        """경계 라벨에서 즉시 탐색 중단 (값이 없으면 빈 값)"""
+        for j in range(label_idx + 1, min(label_idx + self.lookahead, len(self.texts))):
+            val = self.texts[j]
+            if val in self.boundary:
+                break
+            if val.strip():
+                return val
+        return ""
+
+    def _find_approval_date(self, label_idx: int) -> str:
+        """承認日: '年' 문자가 포함된 값을 탐색"""
+        for j in range(label_idx + 1, min(label_idx + self.lookahead, len(self.texts))):
+            val = self.texts[j]
+            if val.strip() and HWPFormConstants.APPROVAL_DATE_MARKER in val:
+                return val
+        return ""
+
+    def _extract_mold_size(self, label_idx: int) -> str:
+        """金型規格: XxXxX 패턴 탐색"""
+        for j in range(label_idx + 1, min(label_idx + HWPFormConstants.MOLD_SIZE_LOOKAHEAD, len(self.texts))):
+            if self._size_pattern.search(self.texts[j]):
+                return self.texts[j]
+        return ""
+
+    def _extract_mold_material(self, label_idx: int) -> Tuple[str, str]:
+        """金型材質: BASE / CORE 값을 가로 배치에서 추출"""
+        base_value = ""
+        core_value = ""
+        j = label_idx + 1
+        limit = min(label_idx + HWPFormConstants.MATERIAL_LOOKAHEAD, len(self.texts))
+
+        while j < limit:
+            current = self.texts[j]
+
+            if current == 'BASE':
+                for k in range(j + 1, len(self.texts)):
+                    nxt = self.texts[k]
+                    if nxt == 'CORE':
+                        break
+                    if nxt.strip() and nxt not in self.boundary:
+                        base_value = nxt
+                        break
+
+            elif current == 'CORE':
+                for k in range(j + 1, len(self.texts)):
+                    nxt = self.texts[k]
+                    if nxt in self.boundary and nxt not in ['BASE', 'CORE']:
+                        break
+                    if nxt.strip() and nxt not in self.boundary:
+                        core_value = nxt
+                        break
+
+            j += 1
+
+        return base_value, core_value
+
+
+# ============================================================================
 # HWP 데이터 추출
 # ============================================================================
 class HWPDataExtractor:
@@ -128,13 +280,13 @@ class HWPDataExtractor:
         self.filepath = hwp_filepath
         self.filename = Path(hwp_filepath).stem
 
-    def sanitize_filename(self, text):
+    def sanitize_filename(self, text: str) -> str:
         """파일명으로 사용할 수 없는 문자를 '_'로 치환"""
-        return re.sub(r'[<>:"/\\|?*]', '_', text)
+        return re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, text)
 
     def extract(self) -> Dict[str, str]:
         """Extract all form fields from HWP file"""
-        row = {chr(65+i): '' for i in range(29)}  # A-AC
+        row = {chr(65+i): '' for i in range(HWPConstants.FIELD_COUNT)}  # A-AC
         row['A'] = self.filename
 
         try:
@@ -171,12 +323,14 @@ class HWPDataExtractor:
 
         return row
 
-    def _extract_fields(self, row: Dict, texts: List[str]):
-        """Extract field values from text list with form-specific parsing"""
+    def _extract_fields(self, row: Dict[str, str], texts: List[str]) -> None:
+        """Extract field values from text list with form-specific parsing.
 
+        폼 시작 위치를 찾아 HWPFieldExtractor에 위임한다.
+        """
         form_start = 0
         for i, text in enumerate(texts):
-            if '保管会社名' in text and ':' in text:
+            if HWPFormConstants.FORM_START_LABEL in text and ':' in text:
                 form_start = i
                 break
 
@@ -184,182 +338,8 @@ class HWPDataExtractor:
             return
 
         form_texts = texts[form_start:]
-
-        # Pattern 1: Label : Value (on same line)
-        for text in form_texts:
-            if ':' in text:
-                parts = text.split(':', 1)
-                if len(parts) == 2:
-                    label, value = parts[0].strip(), parts[1].strip()
-                    value = value.strip()
-
-                    if '保管会社名' in label:
-                        row['B'] = value
-                    elif '作成日子' in label:
-                        row['C'] = value
-                    elif '管理番号' in label:
-                        row['D'] = value
-                    elif '金型価' in label or '金型価格' in label:
-                        row['U'] = value
-
-        # 다음 라벨 목록 (헤더 라벨들) — 경계 역할: 이 라벨이 나오면 앞 필드 탐색 중단
-        next_labels = {
-            '保管会社名', '作成日子', '管理番号',
-            '分 類', '分類', '現 保管処', '現保管処', '製作処', 'MODEL名', 'MODEL',
-            '量産処', '品 名', '品名', '図番番号', '図番', '金型規格', '規格',
-            '金型材質', 'BASE', 'CORE', 'CAVITY 数', 'CAVITY', '金型寿命',
-            'GATE 型式', 'GATE', '使用機械', '機械', '契約日', '承認日'
-        }
-
-        # Pattern 2: Label on one line, value on next (개선된 로직)
-        i = 0
-        while i < len(form_texts):
-            text = form_texts[i]
-
-            if text == '管理番号':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    val = form_texts[j]
-                    if val in next_labels:
-                        break
-                    if val.strip():
-                        row['D'] = val
-                        break
-
-            elif text == '分 類' or text == '分類':
-                # 다음 라벨이 아닌 첫 번째 값 찾기
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['E'] = form_texts[j]
-                        break
-
-            elif text == '現 保管処' or text == '現保管処':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['F'] = form_texts[j]
-                        break
-
-            elif text == '製作処':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['G'] = form_texts[j]
-                        break
-
-            elif text == 'MODEL名' or text == 'MODEL':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['H'] = form_texts[j]
-                        break
-
-            elif text == '量産処':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['I'] = form_texts[j]
-                        break
-
-            elif text == '品 名' or text == '品名':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['J'] = form_texts[j]
-                        break
-
-            elif text == '図番番号' or text == '図番':
-                # 숫자 패턴이 있으면 우선적으로 추출
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    next_text = form_texts[j]
-                    if next_text.strip() and next_text not in next_labels:
-                        row['K'] = next_text
-                        break
-
-            elif text == '金型規格' or text == '規格':
-                # 사이즈 패턴 검사: XxXxX 형태 (예: 650x650x650)
-                size_pattern = re.compile(r'\d{1,5}x\d{1,5}x\d{1,5}', re.IGNORECASE)
-                size_value = ""
-                # 다음 5개 항목까지 검사
-                for j in range(i + 1, min(i + 6, len(form_texts))):
-                    if size_pattern.search(form_texts[j]):
-                        size_value = form_texts[j]
-                        break
-                row['L'] = size_value  # 패턴 없으면 빈 값
-
-            elif text == '金型材質':
-                # BASE와 CORE가 가로로 배치됨: BASE [값] | CORE [값]
-                base_value = ""
-                core_value = ""
-
-                j = i + 1
-                while j < len(form_texts) and j < i + 15:
-                    current_text = form_texts[j]
-
-                    if current_text == 'BASE':
-                        for k in range(j + 1, len(form_texts)):
-                            next_text = form_texts[k]
-                            if next_text == 'CORE':
-                                break
-                            if next_text.strip() and next_text not in next_labels:
-                                base_value = next_text
-                                break
-
-                    elif current_text == 'CORE':
-                        for k in range(j + 1, len(form_texts)):
-                            next_text = form_texts[k]
-                            if next_text in next_labels and next_text not in ['BASE', 'CORE']:
-                                break
-                            if next_text.strip() and next_text not in next_labels:
-                                core_value = next_text
-                                break
-
-                    j += 1
-
-                row['M'] = base_value
-                row['N'] = core_value
-
-            elif text == 'CAVITY 数' or text == 'CAVITY':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['O'] = form_texts[j]
-                        break
-
-            elif text == '金型寿命':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    if form_texts[j].strip() and form_texts[j] not in next_labels:
-                        row['P'] = form_texts[j]
-                        break
-
-            elif text == 'GATE 型式' or text == 'GATE':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    val = form_texts[j]
-                    if val in next_labels:
-                        break  # 다음 라벨 경계에서 중단 (빈 값이면 그냥 비워둠)
-                    if val.strip():
-                        row['Q'] = val
-                        break
-
-            elif text == '使用機械' or text == '機械':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    val = form_texts[j]
-                    if val in next_labels:
-                        break
-                    if val.strip():
-                        row['R'] = val
-                        break
-
-            elif text == '契約日':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    val = form_texts[j]
-                    if val in next_labels:
-                        break
-                    if val.strip():
-                        row['S'] = val
-                        break
-
-            elif text == '承認日':
-                for j in range(i + 1, min(i + 5, len(form_texts))):
-                    next_text = form_texts[j]
-                    if next_text.strip() and '年' in next_text:
-                        row['T'] = next_text
-                        break
-
-            i += 1
+        extractor = HWPFieldExtractor(form_texts)
+        extractor.extract(row)
 
         # 금형사진 파일명 자동 생성 및 저장 (품명_도면번호 형식)
         product_name = row['J'].strip()
@@ -370,41 +350,94 @@ class HWPDataExtractor:
             drawing_no_safe = self.sanitize_filename(drawing_no)
 
             image_filename = f"{product_name_safe}_{drawing_no_safe}"
-            row[chr(65 + 28)] = image_filename
+            row[chr(65 + HWPFormConstants.IMAGE_FIELD_INDEX)] = image_filename
 
 
 # ============================================================================
 # HWP 처리기 (HWP → XLSX)
 # ============================================================================
+
+def _extract_hwp_worker(hwp_path: Path) -> Tuple[Path, List[str]]:
+    """멀티프로세싱 워커: HWP 파일 하나를 추출하고 (파일경로, 행값) 반환.
+
+    ProcessPoolExecutor에서 실행되므로 최상위(top-level) 함수여야 한다.
+    """
+    extractor = HWPDataExtractor(str(hwp_path))
+    row_data = extractor.extract()
+    row_values = [row_data.get(chr(65 + i), "") for i in range(HWPConstants.FIELD_COUNT)]
+    return hwp_path, row_values
+
+
 class HWPProcessor:
     """Process HWP files and convert to XLSX"""
 
-    CANONICAL_HEADERS = [
-        "File name", "保管会社名", "作成日子", "管理番号", "分 類", "現 保管処", "製作処", "MODEL名", "量産処", "品 名",
-        "図番番号", "金型規格", "金型材質-BASE", "金型材質-CORE", "CAVITY 数", "金型寿命", "GATE 型式", "使用機械", "契約日", "承認日",
-        "金型価", "新作", "増作", "二元化", "業者変更", "仕様変更", "修理内訳", "事 由", "金型写真",
-    ]
+    CANONICAL_HEADERS = DocumentConstants.CANONICAL_HEADERS
+
+    # 멀티프로세싱 활성화 기준 파일 수 (이 수 이상이면 병렬 처리)
+    MP_THRESHOLD: int = 5
 
     @classmethod
-    def extract_rows_from_hwp(cls, input_dir: Path, callback=None) -> List[List[str]]:
+    def extract_rows_from_hwp(
+        cls,
+        input_dir: Path,
+        callback: Optional[Callable[[str], None]] = None,
+        workers: Optional[int] = None,
+    ) -> List[List[str]]:
+        """HWP 파일들을 읽어 행 목록을 반환한다.
+
+        Args:
+            input_dir: HWP 파일이 있는 디렉터리.
+            callback: 진행 상황을 전달할 함수 (GUI 연동용).
+            workers: 병렬 프로세스 수. None이면 CPU 수에 따라 자동 결정.
+                     파일 수가 MP_THRESHOLD 미만이면 단일 프로세스로 실행.
+        """
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
         hwp_files = sorted(input_dir.glob("*.hwp"))
         if not hwp_files:
             raise FileNotFoundError(f"No HWP files found in: {input_dir}")
 
-        rows: List[List[str]] = []
         total = len(hwp_files)
-        for idx, hwp_file in enumerate(hwp_files, start=1):
-            msg = f"[{idx}/{total}] 추출 중: {hwp_file.name}"
-            if callback:
-                callback(msg)
-            else:
-                print(msg)
-            extractor = HWPDataExtractor(str(hwp_file))
-            row_data = extractor.extract()
-            row_values = [row_data.get(chr(65 + i), "") for i in range(29)]
-            rows.append(row_values)
 
-        return rows
+        # 파일 수가 적으면 단일 프로세스 (프로세스 생성 오버헤드 방지)
+        use_mp = total >= cls.MP_THRESHOLD
+        if use_mp:
+            cpu_count = multiprocessing.cpu_count()
+            max_workers = workers if workers else max(1, min(cpu_count, total))
+        else:
+            max_workers = 1
+
+        # 순서 보장을 위해 결과를 {Path: row_values} 딕셔너리에 수집
+        results: Dict[Path, List[str]] = {}
+
+        if use_mp and max_workers > 1:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future_to_path = {
+                    executor.submit(_extract_hwp_worker, f): f for f in hwp_files
+                }
+                done = 0
+                for future in as_completed(future_to_path):
+                    done += 1
+                    hwp_path, row_values = future.result()
+                    results[hwp_path] = row_values
+                    msg = f"[{done}/{total}] 완료: {hwp_path.name}"
+                    if callback:
+                        callback(msg)
+                    else:
+                        print(msg)
+        else:
+            for idx, hwp_file in enumerate(hwp_files, start=1):
+                msg = f"[{idx}/{total}] 추출 중: {hwp_file.name}"
+                if callback:
+                    callback(msg)
+                else:
+                    print(msg)
+                _, row_values = _extract_hwp_worker(hwp_file)
+                results[hwp_file] = row_values
+
+        # 원래 파일 순서대로 정렬하여 반환
+        return [results[f] for f in hwp_files]
 
     @classmethod
     def save_xlsx(cls, rows: List[List[str]], output_xlsx: Path) -> None:
@@ -421,12 +454,18 @@ class HWPProcessor:
         wb.save(output_xlsx)
 
     @classmethod
-    def process(cls, input_dir: Path, output_xlsx: Path, callback=None) -> None:
+    def process(
+        cls,
+        input_dir: Path,
+        output_xlsx: Path,
+        callback: Optional[Callable[[str], None]] = None,
+        workers: Optional[int] = None,
+    ) -> None:
         """Main entry point: HWP folder → XLSX file"""
         if not input_dir.exists():
             raise FileNotFoundError(f"input-dir not found: {input_dir}")
 
-        rows = cls.extract_rows_from_hwp(input_dir, callback=callback)
+        rows = cls.extract_rows_from_hwp(input_dir, callback=callback, workers=workers)
         cls.save_xlsx(rows, output_xlsx)
 
         msg = f"✓ 저장 완료: {output_xlsx} ({len(rows)}행)"
@@ -442,14 +481,9 @@ class HWPProcessor:
 class HWPImageExtractor:
     """Extract images from HWP files"""
 
-    MAGIC_BYTES = {
-        b'\xFF\xD8\xFF': 'jpg',
-        b'\x89PNG\r\n\x1a\n': 'png',
-        b'BM': 'bmp',
-        b'GIF8': 'gif',
-    }
+    MAGIC_BYTES = HWPConstants.IMAGE_MAGIC_BYTES
 
-    def __init__(self, hwp_path, output_dir='img'):
+    def __init__(self, hwp_path: str, output_dir: str = 'img') -> None:
         self.hwp_path = hwp_path
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
@@ -466,17 +500,17 @@ class HWPImageExtractor:
         except Exception as e:
             logger.warning(f"HWP 메타데이터 추출 실패 (파일명으로 대체): {hwp_path} - {e}")
 
-    def sanitize_filename(self, text):
+    def sanitize_filename(self, text: str) -> str:
         """파일명으로 사용할 수 없는 문자를 '_'로 치환"""
-        return re.sub(r'[<>:"/\\|?*]', '_', text)
+        return re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, text)
 
-    def detect_image_format(self, data):
+    def detect_image_format(self, data: bytes) -> Optional[str]:
         for magic, fmt in self.MAGIC_BYTES.items():
             if data.startswith(magic):
                 return fmt
         return None
 
-    def try_decompress(self, data):
+    def try_decompress(self, data: bytes) -> bytes:
         """Try to decompress zlib compressed data"""
         try:
             return zlib.decompress(data, -15)
@@ -486,7 +520,7 @@ class HWPImageExtractor:
             except zlib.error:
                 return data
 
-    def try_fix_image(self, data):
+    def try_fix_image(self, data: bytes) -> Tuple[Optional[bytes], Optional[str]]:
         try:
             img = Image.open(BytesIO(data))
             img.verify()
@@ -501,7 +535,7 @@ class HWPImageExtractor:
                 logger.debug(f"이미지 변환 실패 (스킵): {e}")
                 return None, 'error'
 
-    def extract_images(self):
+    def extract_images(self) -> int:
         if not Path(self.hwp_path).exists():
             return 0
 
@@ -577,39 +611,123 @@ class HWPImageExtractor:
 
 
 # ============================================================================
+# 이미지 캐시 (반복 glob 방지)
+# ============================================================================
+class ImageCache:
+    """디렉터리 내 이미지 파일을 한 번 인덱싱하여 O(1) 탐색을 제공한다.
+
+    DocumentFiller.process() / DocxSyncManager.sync() 처럼 같은 img_dir를
+    여러 행에 걸쳐 반복 탐색하는 경우 이 캐시를 먼저 생성하고 넘겨준다.
+    이미지 파일이 추가/삭제된 경우 invalidate() 후 rebuild()를 호출한다.
+    """
+
+    def __init__(self, img_dir: Path) -> None:
+        self.img_dir = img_dir
+        self._index: Dict[str, Path] = {}
+        if img_dir.exists():
+            self._build()
+
+    # ------------------------------------------------------------------
+    # 인덱스 빌드
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        """이미지 디렉터리 전체를 스캔하여 stem → Path 인덱스를 구성한다.
+
+        - 정확한 stem: "VFD HOLDER_1072001450"
+        - sanitized stem: "VFD HOLDER_1072001450" (특수문자 치환)
+        - 연번 제거 stem: "VFD HOLDER_1072001450" (말미 _2, _3 ... 제거)
+        """
+        self._index.clear()
+        exts = set(DocumentConstants.IMAGE_EXTS)
+        for p in self.img_dir.iterdir():
+            if not p.is_file() or p.suffix.lower() not in exts:
+                continue
+            stem = p.stem
+
+            # 정확한 stem 등록 (나중에 들어온 파일이 앞의 것을 덮어쓰지 않도록
+            # 연번 없는 파일을 우선)
+            self._register(stem, p)
+
+            # sanitized stem (특수문자 → '_')
+            sanitized = re.sub(
+                DocumentConstants.INVALID_FILENAME_CHARS,
+                DocumentConstants.INVALID_FILENAME_REPLACEMENT,
+                stem,
+            )
+            if sanitized != stem:
+                self._register(sanitized, p)
+
+            # 연번 접미사 제거 stem (예: "xxx_2" → "xxx")
+            base = re.sub(r'_\d+$', '', stem)
+            if base != stem:
+                self._register(base, p)
+
+    def _register(self, key: str, path: Path) -> None:
+        """연번 없는 파일(우선순위 높음)이 있을 때 덮어쓰지 않는다."""
+        if key not in self._index:
+            self._index[key] = path
+        else:
+            # 현재 등록된 파일이 연번 접미사를 가지면 새 파일로 교체
+            existing_stem = self._index[key].stem
+            if re.search(r'_\d+$', existing_stem):
+                self._index[key] = path
+
+    # ------------------------------------------------------------------
+    # 탐색
+    # ------------------------------------------------------------------
+    def find(self, stem: str) -> Optional[Path]:
+        """stem(확장자 없음)으로 이미지를 O(1)에 검색한다.
+
+        1. 정확한 stem 탐색
+        2. sanitized stem 탐색
+        3. img_dir가 바뀐 경우를 위해 존재 여부 재확인
+        """
+        # 1. 정확한 stem
+        result = self._index.get(stem)
+        if result and result.exists():
+            return result
+
+        # 2. sanitized stem
+        sanitized = re.sub(
+            DocumentConstants.INVALID_FILENAME_CHARS,
+            DocumentConstants.INVALID_FILENAME_REPLACEMENT,
+            stem,
+        )
+        if sanitized != stem:
+            result = self._index.get(sanitized)
+            if result and result.exists():
+                return result
+
+        # 3. trailing underscore/dash 제거 후 재시도
+        clean = stem.rstrip('_- ')
+        if clean and clean != stem:
+            result = self._index.get(clean)
+            if result and result.exists():
+                return result
+
+        return None
+
+    def invalidate(self) -> None:
+        """캐시 무효화 후 재빌드 (파일 추가/삭제 후 호출)"""
+        if self.img_dir.exists():
+            self._build()
+        else:
+            self._index.clear()
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+
+# ============================================================================
 # 문서 채우기 (XLSX → DOCX)
 # ============================================================================
 class DocumentFiller:
     """Fill DOCX from XLSX with placeholder tokens and images"""
 
-    CHECKBOX_LABELS = {"新作", "増作", "二元化", "業者更変", "機種更変"}
-    IMAGE_TOKEN = "{金型写真}"
-    IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"]
-
-    ALIASES = {
-        "保管社名": ["保管会社名", "保管社名", "storage_company", "보관사명"],
-        "作成日子": ["作成日子", "created_date", "작성일자"],
-        "分  類": ["分 類", "분류"],
-        "現保管処": ["現 保管処", "current_storage", "현보관처"],
-        "製作処": ["製作処", "maker", "제작처"],
-        "MODEL名": ["MODEL名", "model_name", "모델명"],
-        "量産処": ["量産処", "mass_prod", "양산처"],
-        "品  名": ["品 名", "product_name", "품명", "제품명"],
-        "図番番号": ["図番番号", "drawing_no", "도번번호", "도번", "품번"],
-        "金型規格": ["金型規格", "mold_size", "금형규격"],
-        "BASE": ["金型材質-BASE", "BASE"],
-        "CORE": ["金型材質-CORE", "CORE"],
-        "CAVITY 数": ["CAVITY 数", "CAVITY수"],
-        "GATE型式": ["GATE 型式", "GATE型式"],
-        "使用機械": ["使用機械", "machine", "사용기계"],
-        "契約日": ["契約日", "contract_date", "계약일"],
-        "承認日": ["承認日", "approval_date", "승인일"],
-        "修理訳内容": ["修理内訳", "修理訳内容", "repair_history"],
-        "業者更変": ["業者変更", "業者更変"],
-        "機種更変": ["仕様変更", "機種更変"],
-        "金型": ["金型価", "금형가"],
-        "金型命": ["金型寿命", "금형수명"],
-    }
+    CHECKBOX_LABELS = DocumentConstants.CHECKBOX_LABELS
+    IMAGE_TOKEN = DocumentConstants.IMAGE_TOKEN
+    IMAGE_EXTS = DocumentConstants.IMAGE_EXTS
+    ALIASES = DocumentConstants.ALIASES
 
     @staticmethod
     def normalize(text: str) -> str:
@@ -666,14 +784,14 @@ class DocumentFiller:
         return re.sub(r"\{[^{}]+\}", repl, text), replaced_count, replaced_labels
 
     @staticmethod
-    def apply_small_font_if_needed(paragraph, replaced_labels: Set[str]) -> None:
+    def apply_small_font_if_needed(paragraph: Any, replaced_labels: Set[str]) -> None:
         if not ({"BASE", "CORE"} & replaced_labels):
             return
         for run in paragraph.runs:
-            run.font.size = Pt(6)
+            run.font.size = Pt(DocumentConstants.MOLD_MATERIAL_FONT_SIZE_PT)
 
     @classmethod
-    def _copy_text_run_format(cls, src_run, dst_run) -> None:
+    def _copy_text_run_format(cls, src_run: Any, dst_run: Any) -> None:
         dst_run.bold = src_run.bold
         dst_run.italic = src_run.italic
         dst_run.underline = src_run.underline
@@ -682,13 +800,13 @@ class DocumentFiller:
         dst_run.font.size = src_run.font.size
 
     @classmethod
-    def _insert_run_after(cls, paragraph, after_run, text: str = ""):
+    def _insert_run_after(cls, paragraph: Any, after_run: Any, text: str = "") -> Any:
         new_run = paragraph.add_run(text)
         after_run._r.addnext(new_run._r)
         return new_run
 
     @classmethod
-    def _insert_image_in_paragraph(cls, paragraph, image_path: Optional[Path]) -> int:
+    def _insert_image_in_paragraph(cls, paragraph: Any, image_path: Optional[Path]) -> int:
         para_text = paragraph.text or ""
         if cls.IMAGE_TOKEN not in para_text:
             return 0
@@ -711,7 +829,7 @@ class DocumentFiller:
             for part in parts[1:]:
                 if image_path and image_path.exists():
                     img_run = cls._insert_run_after(paragraph, cursor)
-                    img_run.add_picture(str(image_path), width=Cm(18.5), height=Cm(13.87))
+                    img_run.add_picture(str(image_path), width=Cm(DocumentConstants.IMAGE_WIDTH_CM), height=Cm(DocumentConstants.IMAGE_HEIGHT_CM))
                     cursor = img_run
                     inserted += 1
 
@@ -738,7 +856,7 @@ class DocumentFiller:
         for part in parts[1:]:
             if image_path and image_path.exists():
                 img_run = cls._insert_run_after(paragraph, cursor)
-                img_run.add_picture(str(image_path), width=Cm(18.5), height=Cm(13.87))
+                img_run.add_picture(str(image_path), width=Cm(DocumentConstants.IMAGE_WIDTH_CM), height=Cm(DocumentConstants.IMAGE_HEIGHT_CM))
                 cursor = img_run
                 inserted += 1
 
@@ -779,7 +897,7 @@ class DocumentFiller:
                 return p
 
         # sanitize 처리한 이름으로 찾기 (파일명 사용 불가 문자 처리)
-        sanitized_stem = re.sub(r'[<>:"/\\|?*]', '_', output_stem)
+        sanitized_stem = re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, output_stem)
         if sanitized_stem != output_stem:
             for ext in cls.IMAGE_EXTS:
                 p = img_dir / f"{sanitized_stem}{ext}"
@@ -815,7 +933,7 @@ class DocumentFiller:
 
         if matches:
             # 연번이 없는 파일 우선 (예: "xxx_yyy.jpg" > "xxx_yyy_2.jpg")
-            matches_no_suffix = [m for m in matches if not m.stem.endswith(('_2', '_3', '_4', '_5'))]
+            matches_no_suffix = [m for m in matches if not m.stem.endswith(DocumentConstants.IMAGE_NUMBERED_SUFFIXES)]
             if matches_no_suffix:
                 return matches_no_suffix[0]
             return matches[0]
@@ -892,7 +1010,7 @@ class DocumentFiller:
 
     @classmethod
     def process(cls, xlsx_path: Path, template_path: Path, out_dir: Path, img_dir: Path,
-                limit: int = 0, callback=None) -> None:
+                limit: int = 0, callback: Optional[Callable[[str], None]] = None) -> None:
         """Main entry point: XLSX + Template → DOCX files with images"""
         def _log(msg):
             if callback:
@@ -917,6 +1035,10 @@ class DocumentFiller:
         # 이미지 파일명 저장 (XLSX 업데이트용)
         image_updates = {}  # {row_idx: image_filename}
 
+        # ImageCache: img_dir 전체를 한 번 인덱싱 (행마다 반복 glob 방지)
+        img_cache = ImageCache(img_dir)
+        data_cache = ImageCache(out_dir / ".data")
+
         total = len(rows)
         for idx, row in enumerate(rows, start=1):
             doc = Document(str(template_path))
@@ -931,29 +1053,28 @@ class DocumentFiller:
             # 1. XLSX의 "金型写真"(품명_도번)으로 먼저 시도
             image_name = row.get("金型写真", "").strip()
             if image_name:
-                image_path = cls.find_image_for_output(img_dir, image_name)
+                image_path = img_cache.find(image_name)
 
             # 2. "金型写真"으로 못 찾으면 XLSX의 도번으로 시도
             if not image_path:
                 drawing_no = cls.value_by_aliases(nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
                 if drawing_no:
-                    image_path = cls.find_image_for_output(img_dir, drawing_no)
+                    image_path = img_cache.find(drawing_no)
 
             # 2.5. 품명만으로 검색 (도번 없는 경우: XLSX에 "品名_"처럼 저장된 상황 대비)
             if not image_path:
                 product_name = cls.value_by_aliases(nrow, ["品  名", "品 名", "product_name", "품명"])
                 if product_name:
-                    sanitized_pname = re.sub(r'[<>:"/\\|?*]', '_', product_name.strip())
-                    image_path = cls.find_image_for_output(img_dir, sanitized_pname)
+                    image_path = img_cache.find(product_name.strip())
 
             # 3. 도번으로도 못 찾으면 out_name(연번)으로 시도
             if not image_path:
-                image_path = cls.find_image_for_output(img_dir, out_name)
+                image_path = img_cache.find(out_name)
 
             # 4. img_dir에 없으면 out_dir/.data/ 도 검색 (신규 발행 첨부 이미지)
             if not image_path:
                 search_name = image_name or out_name
-                image_path = cls.find_image_for_output(out_dir / ".data", search_name)
+                image_path = data_cache.find(search_name)
 
             inserted = cls.insert_images_by_token(doc, image_path)
 
@@ -979,7 +1100,7 @@ class DocumentFiller:
 
             # 金型写真 컬럼 정확하게 찾기 (전체 텍스트 매칭)
             photo_col_idx = None
-            for col_idx in range(1, 40):
+            for col_idx in range(1, DocumentConstants.XLSX_MAX_COL_SEARCH):
                 h = ws.cell(1, col_idx).value
                 if h:
                     h_str = str(h).strip()
@@ -992,7 +1113,7 @@ class DocumentFiller:
             if photo_col_idx is None:
                 # 마지막 비어있지 않은 컬럼 찾기
                 last_col = 1
-                for col_idx in range(1, 40):
+                for col_idx in range(1, DocumentConstants.XLSX_MAX_COL_SEARCH):
                     if ws.cell(1, col_idx).value:
                         last_col = col_idx
                 photo_col_idx = last_col + 1
@@ -1022,7 +1143,7 @@ class DocxSyncManager:
         return output_dir / cls.MANIFEST_FILENAME
 
     @classmethod
-    def load_manifest(cls, output_dir: Path) -> Dict:
+    def load_manifest(cls, output_dir: Path) -> Dict[str, Any]:
         """manifest.json 로드 (없으면 빈 딕셔너리)"""
         path = cls._manifest_path(output_dir)
         if path.exists():
@@ -1034,7 +1155,7 @@ class DocxSyncManager:
         return {}
 
     @classmethod
-    def save_manifest(cls, output_dir: Path, manifest: Dict) -> None:
+    def save_manifest(cls, output_dir: Path, manifest: Dict[str, Any]) -> None:
         """manifest.json 저장"""
         output_dir.mkdir(parents=True, exist_ok=True)
         path = cls._manifest_path(output_dir)
@@ -1053,7 +1174,7 @@ class DocxSyncManager:
         return ""
 
     @classmethod
-    def rename_image_files(cls, img_dir: Path, old_serial: str, new_serial: str, callback=None) -> int:
+    def rename_image_files(cls, img_dir: Path, old_serial: str, new_serial: str, callback: Optional[Callable[[str], None]] = None) -> int:
         """연번 변경에 따른 이미지 파일명 변경"""
         if not img_dir.exists() or not old_serial or old_serial == new_serial:
             return 0
@@ -1071,7 +1192,7 @@ class DocxSyncManager:
 
     @classmethod
     def sync(cls, xlsx_path: Path, template_path: Path, output_dir: Path,
-             img_dir: Path, callback=None) -> None:
+             img_dir: Path, callback: Optional[Callable[[str], None]] = None) -> None:
         """XLSX 변경사항을 DOCX 파일에 동기화"""
         if callback:
             callback("동기화 시작...")
@@ -1127,6 +1248,11 @@ class DocxSyncManager:
         total = len(rows)
         new_manifest = dict(manifest)  # 기존 manifest 복사
 
+        # ImageCache: img_dir 전체를 한 번 인덱싱 (행마다 반복 glob 방지)
+        # 1단계 rename 이후 캐시를 빌드해야 최신 파일명을 반영한다.
+        img_cache = ImageCache(img_dir)
+        data_cache = ImageCache(output_dir / ".data")
+
         for idx, row in enumerate(rows, start=1):
             try:
                 doc = Document(str(template_path))
@@ -1135,12 +1261,34 @@ class DocxSyncManager:
 
                 out_name = DocumentFiller.pick_output_name(row, idx)
                 image_name = row.get("金型写真", "").strip()
-                search_name = image_name if image_name else out_name
-                image_path = DocumentFiller.find_image_for_output(img_dir, search_name)
+                image_path = None
+
+                # 1. XLSX의 金型写真(품명_도번)으로 시도
+                if image_name:
+                    image_path = img_cache.find(image_name)
+
+                # 2. 図番番号로 시도
                 if not image_path:
-                    image_path = DocumentFiller.find_image_for_output(
-                        output_dir / ".data", search_name
-                    )
+                    drawing_no = DocumentFiller.value_by_aliases(
+                        nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
+                    if drawing_no:
+                        image_path = img_cache.find(drawing_no)
+
+                # 2.5. 品名으로 시도 (도번 없는 경우)
+                if not image_path:
+                    product_name = DocumentFiller.value_by_aliases(
+                        nrow, ["品  名", "品 名", "product_name", "품명"])
+                    if product_name:
+                        image_path = img_cache.find(product_name.strip())
+
+                # 3. out_name(연번)으로 시도
+                if not image_path:
+                    image_path = img_cache.find(out_name)
+
+                # 4. output_dir/.data/ 검색 (신규 발행 첨부 이미지)
+                if not image_path:
+                    search_name = image_name or out_name
+                    image_path = data_cache.find(search_name)
 
                 DocumentFiller.insert_images_by_token(doc, image_path)
                 out_path = output_dir / f"{out_name}.docx"
@@ -1236,7 +1384,7 @@ class MaintenanceHistoryManager:
 
     @classmethod
     def update_xlsx_reason(cls, docx_path: Path, xlsx_path: Path, content: str,
-                           callback=None) -> bool:
+                           callback: Optional[Callable[[str], None]] = None) -> bool:
         """XLSX의 '事 由' 컬럼을 content로 갱신 (Word 재생성 없음)"""
         stem = docx_path.stem
 
@@ -1296,7 +1444,7 @@ class MaintenanceHistoryManager:
 
     @classmethod
     def apply_to_word(cls, docx_path: Path, xlsx_path: Path, template_path: Path,
-                      img_dir: Path, callback=None) -> bool:
+                      img_dir: Path, callback: Optional[Callable[[str], None]] = None) -> bool:
         """이력 내용을 XLSX에 반영하고 Word 파일 재생성"""
         if not docx_path.exists():
             if callback:
@@ -1359,7 +1507,7 @@ class MaintenanceHistoryManager:
                 product_name = DocumentFiller.value_by_aliases(
                     nrow, ["品  名", "品 名", "product_name", "품명"])
                 if product_name:
-                    sanitized_pname = re.sub(r'[<>:"/\\|?*]', '_', product_name.strip())
+                    sanitized_pname = re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, product_name.strip())
                     image_path = DocumentFiller.find_image_for_output(img_dir, sanitized_pname)
 
             # 3. out_name(연번)으로 시도
@@ -1382,6 +1530,146 @@ class MaintenanceHistoryManager:
             if callback:
                 callback(f"Word 재생성 오류: {e}")
             return False
+
+
+# ============================================================================
+# MoldHistoryCard - 데이터 모델 및 검증 레이어
+# ============================================================================
+@dataclass
+class MoldHistoryCard:
+    """금형 이력카드 데이터 모델.
+
+    Dict[str, str] 형태의 XLSX 행 데이터를 구조화된 객체로 감싸고
+    기본적인 유효성 검증(validate)을 제공한다.
+    신규 발행(NewCardManager) 및 동기화(DocxSyncManager)에서 활용한다.
+    """
+    # 식별 필드 (필수)
+    file_name: str
+    management_no: str      # 管理番号
+    product_name: str       # 品名
+    drawing_no: str         # 図番番号
+
+    # 선택 필드
+    storage_company: Optional[str] = None   # 保管会社名
+    created_date: Optional[str] = None      # 作成日子
+    classification: Optional[str] = None    # 分 類
+    current_storage: Optional[str] = None  # 現 保管処
+    maker: Optional[str] = None             # 製作処
+    model_name: Optional[str] = None        # MODEL名
+    mass_prod: Optional[str] = None         # 量産処
+    mold_size: Optional[str] = None         # 金型規格
+    material_base: Optional[str] = None     # 金型材質-BASE
+    material_core: Optional[str] = None     # 金型材質-CORE
+    cavity_count: Optional[str] = None      # CAVITY 数
+    mold_lifetime: Optional[str] = None     # 金型寿命
+    gate_type: Optional[str] = None         # GATE 型式
+    machine: Optional[str] = None           # 使用機械
+    contract_date: Optional[str] = None     # 契約日
+    approval_date: Optional[str] = None     # 承認日
+    mold_price: Optional[str] = None        # 金型価
+    image_filename: Optional[str] = None    # 金型写真
+
+    # 체크박스 필드
+    is_new: bool = False          # 新作
+    is_increase: bool = False     # 増作
+    is_dual: bool = False         # 二元化
+    is_vendor_change: bool = False  # 業者変更
+    is_spec_change: bool = False    # 仕様変更
+
+    def validate(self) -> List[str]:
+        """필수 필드 및 형식 검증. 오류 메시지 목록을 반환한다 (빈 목록 = 정상)."""
+        errors: List[str] = []
+
+        if not self.management_no:
+            errors.append("管理番号가 비어있습니다")
+        if not self.product_name:
+            errors.append("品名이 비어있습니다")
+        if not self.drawing_no:
+            errors.append("図番番号가 비어있습니다")
+
+        # 연번 형식 검증 (예: 19-001)
+        if self.file_name and not re.match(r"^\d{2}-\d{3}$", self.file_name):
+            errors.append(f"파일명 형식 오류: {self.file_name!r} (예: 19-001)")
+
+        # 날짜 형식 검증 (YYYY.MM.DD)
+        if self.created_date:
+            try:
+                datetime.strptime(self.created_date, "%Y.%m.%d")
+            except ValueError:
+                errors.append(f"작성일자 형식 오류: {self.created_date!r} (예: 2024.01.15)")
+
+        return errors
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, str]) -> 'MoldHistoryCard':
+        """XLSX 행 딕셔너리에서 MoldHistoryCard 생성"""
+        def _bool(key: str) -> bool:
+            return data.get(key, "").strip() == "1"
+
+        return cls(
+            file_name=data.get("File name", ""),
+            management_no=data.get("管理番号", ""),
+            product_name=data.get("品 名", ""),
+            drawing_no=data.get("図番番号", ""),
+            storage_company=data.get("保管会社名") or None,
+            created_date=data.get("作成日子") or None,
+            classification=data.get("分 類") or None,
+            current_storage=data.get("現 保管処") or None,
+            maker=data.get("製作処") or None,
+            model_name=data.get("MODEL名") or None,
+            mass_prod=data.get("量産処") or None,
+            mold_size=data.get("金型規格") or None,
+            material_base=data.get("金型材質-BASE") or None,
+            material_core=data.get("金型材質-CORE") or None,
+            cavity_count=data.get("CAVITY 数") or None,
+            mold_lifetime=data.get("金型寿命") or None,
+            gate_type=data.get("GATE 型式") or None,
+            machine=data.get("使用機械") or None,
+            contract_date=data.get("契約日") or None,
+            approval_date=data.get("承認日") or None,
+            mold_price=data.get("金型価") or None,
+            image_filename=data.get("金型写真") or None,
+            is_new=_bool("新作"),
+            is_increase=_bool("増作"),
+            is_dual=_bool("二元化"),
+            is_vendor_change=_bool("業者変更"),
+            is_spec_change=_bool("仕様変更"),
+        )
+
+    def to_dict(self) -> Dict[str, str]:
+        """XLSX 행 딕셔너리로 변환 (DocumentFiller 호환)"""
+        def _flag(val: bool) -> str:
+            return "1" if val else ""
+
+        return {
+            "File name": self.file_name,
+            "管理番号": self.management_no,
+            "品 名": self.product_name,
+            "図番番号": self.drawing_no,
+            "保管会社名": self.storage_company or "",
+            "作成日子": self.created_date or "",
+            "分 類": self.classification or "",
+            "現 保管処": self.current_storage or "",
+            "製作処": self.maker or "",
+            "MODEL名": self.model_name or "",
+            "量産処": self.mass_prod or "",
+            "金型規格": self.mold_size or "",
+            "金型材質-BASE": self.material_base or "",
+            "金型材質-CORE": self.material_core or "",
+            "CAVITY 数": self.cavity_count or "",
+            "金型寿命": self.mold_lifetime or "",
+            "GATE 型式": self.gate_type or "",
+            "使用機械": self.machine or "",
+            "契約日": self.contract_date or "",
+            "承認日": self.approval_date or "",
+            "金型価": self.mold_price or "",
+            "新作": _flag(self.is_new),
+            "増作": _flag(self.is_increase),
+            "二元化": _flag(self.is_dual),
+            "業者変更": _flag(self.is_vendor_change),
+            "仕様変更": _flag(self.is_spec_change),
+            "金型写真": self.image_filename or "",
+        }
 
 
 # ============================================================================
@@ -1425,7 +1713,7 @@ class NewCardManager:
 
     @classmethod
     def sanitize(cls, text: str) -> str:
-        return re.sub(r'[<>:"/\\|?*]', "_", text)
+        return re.sub(DocumentConstants.INVALID_FILENAME_CHARS, DocumentConstants.INVALID_FILENAME_REPLACEMENT, text)
 
     @classmethod
     def add_to_xlsx(cls, xlsx_path: Path, row_dict: Dict[str, str]) -> None:
@@ -1442,7 +1730,7 @@ class NewCardManager:
     def generate_card(cls, xlsx_path: Path, template_path: Path, output_dir: Path,
                       img_dir: Path, row_dict: Dict[str, str],
                       image_source_path: Optional[Path] = None,
-                      callback=None) -> Optional[Path]:
+                      callback: Optional[Callable[[str], None]] = None) -> Optional[Path]:
         """신규 이력카드 생성: XLSX 추가 → 이미지 복사(.data/) → Word 파일 생성"""
         try:
             product = cls.sanitize(row_dict.get("品 名", "").strip())
