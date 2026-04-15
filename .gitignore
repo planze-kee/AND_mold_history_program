@@ -46,9 +46,6 @@ install_pypdf_windows.md
 PDF_CONVERTER_GUIDE.md
 PDF_EXTRA_FEATURES.md
 
-# ── 잘못 생성된 경로 디렉토리 ────────────────────────────────
-C:/
-
 # ── 불필요한 예시/테스트 파일 ────────────────────────────────
 pdf_converter_example.py
 pdf_usage_example.py
