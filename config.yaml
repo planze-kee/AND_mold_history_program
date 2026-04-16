@@ -6,7 +6,7 @@ paths:
   docx_xlsx: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/00.DB-SAMCO.xlsx
   docx_template: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/data/templates/Word_양식_이력일자
     제거본.docx
-  docx_img: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test/SAMCO img
+  docx_img: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/img
   docx_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test
   hist_xlsx: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/00.DB-SAMCO.xlsx
   hist_template: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/data/templates/Word_양식_이력일자
@@ -17,7 +17,7 @@ paths:
   pdf_batch_output: data/output_pdf
   pdf_merge_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test/merged.pdf
 ui:
-  window_x: 2180
-  window_y: 278
+  window_x: 1026
+  window_y: 268
   window_width: 560
   window_height: 557
