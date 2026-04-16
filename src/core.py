@@ -3,6 +3,7 @@
 """
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import re
@@ -1174,6 +1175,21 @@ class DocxSyncManager:
         return ""
 
     @classmethod
+    def compute_row_hash(cls, row: Dict[str, Any]) -> str:
+        """행 내용을 정규화하여 SHA1 해시 산출 (키 정렬로 순서 독립성 보장)"""
+        norm = {k: str(v).strip() for k, v in sorted(row.items())}
+        payload = json.dumps(norm, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def compute_image_sig(cls, image_path: Optional[Path]) -> str:
+        """이미지 파일 서명 (경로 + mtime + size). 이미지 교체 감지용."""
+        if not image_path or not image_path.exists():
+            return ""
+        st = image_path.stat()
+        return f"{image_path.name}|{int(st.st_mtime)}|{st.st_size}"
+
+    @classmethod
     def rename_image_files(cls, img_dir: Path, old_serial: str, new_serial: str, callback: Optional[Callable[[str], None]] = None) -> int:
         """연번 변경에 따른 이미지 파일명 변경"""
         if not img_dir.exists() or not old_serial or old_serial == new_serial:
@@ -1191,9 +1207,52 @@ class DocxSyncManager:
         return renamed
 
     @classmethod
+    def _resolve_image(
+        cls,
+        row: Dict[str, Any],
+        out_name: str,
+        img_cache: "ImageCache",
+        data_cache: "ImageCache",
+    ) -> Optional[Path]:
+        """행 데이터에서 이미지 경로를 탐색하는 헬퍼 (sync/단건 공통)"""
+        nrow = DocumentFiller.row_norm_map(row)
+        image_name = row.get("金型写真", "").strip()
+        image_path = None
+
+        # 1. XLSX의 金型写真(품명_도번)으로 시도
+        if image_name:
+            image_path = img_cache.find(image_name)
+
+        # 2. 図番番号로 시도
+        if not image_path:
+            drawing_no = DocumentFiller.value_by_aliases(
+                nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
+            if drawing_no:
+                image_path = img_cache.find(drawing_no)
+
+        # 2.5. 品名으로 시도 (도번 없는 경우)
+        if not image_path:
+            product_name = DocumentFiller.value_by_aliases(
+                nrow, ["品  名", "品 名", "product_name", "품명"])
+            if product_name:
+                image_path = img_cache.find(product_name.strip())
+
+        # 3. out_name(연번)으로 시도
+        if not image_path:
+            image_path = img_cache.find(out_name)
+
+        # 4. output_dir/.data/ 검색 (신규 발행 첨부 이미지)
+        if not image_path:
+            search_name = image_name or out_name
+            image_path = data_cache.find(search_name)
+
+        return image_path
+
+    @classmethod
     def sync(cls, xlsx_path: Path, template_path: Path, output_dir: Path,
-             img_dir: Path, callback: Optional[Callable[[str], None]] = None) -> None:
-        """XLSX 변경사항을 DOCX 파일에 동기화"""
+             img_dir: Path, callback: Optional[Callable[[str], None]] = None,
+             force_all: bool = False) -> None:
+        """XLSX 변경사항을 DOCX 파일에 동기화 (증분 재생성 지원)"""
         if callback:
             callback("동기화 시작...")
 
@@ -1201,15 +1260,23 @@ class DocxSyncManager:
         manifest = cls.load_manifest(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 템플릿 변경 자동 감지 → 변경 시 전체 강제 재생성
+        current_tpl_hash = hashlib.sha1(template_path.read_bytes()).hexdigest()
+        meta = manifest.get("_meta", {})
+        if meta.get("template_hash") != current_tpl_hash:
+            if not force_all and meta.get("template_hash"):
+                # 이전 해시가 있는데 달라진 경우에만 알림 (최초 실행은 조용히)
+                if callback:
+                    callback("템플릿 변경 감지 → 전체 재생성")
+            force_all = True
+
         # 1단계: 파일명 변경 감지 및 rename
         renamed_files = 0
         for idx, row in enumerate(rows, start=1):
             mgmt_no = row.get("管理番号", "").strip()
-            if not mgmt_no:
+            if not mgmt_no or mgmt_no not in manifest:
                 continue
             current_name = DocumentFiller.pick_output_name(row, idx)
-            if mgmt_no not in manifest:
-                continue
             old_name = manifest[mgmt_no].get("file_name", "")
             if not old_name or old_name == current_name:
                 continue
@@ -1241,78 +1308,82 @@ class DocxSyncManager:
         if renamed_files > 0 and callback:
             callback(f"파일명 변경: {renamed_files}건 처리됨")
 
-        # 2단계: 전체 DOCX 재생성 (최신 XLSX 데이터로 덮어쓰기)
+        # 2단계: 증분 DOCX 재생성
         if callback:
             callback("DOCX 내용 갱신 중...")
 
         total = len(rows)
-        new_manifest = dict(manifest)  # 기존 manifest 복사
+        new_manifest: Dict[str, Any] = {"_meta": {"template_hash": current_tpl_hash}}
 
-        # ImageCache: img_dir 전체를 한 번 인덱싱 (행마다 반복 glob 방지)
-        # 1단계 rename 이후 캐시를 빌드해야 최신 파일명을 반영한다.
+        # ImageCache: 1단계 rename 이후 빌드해야 최신 파일명을 반영
         img_cache = ImageCache(img_dir)
         data_cache = ImageCache(output_dir / ".data")
 
+        skipped = 0
+        regenerated = 0
+        created = 0
+
         for idx, row in enumerate(rows, start=1):
+            mgmt_no = row.get("管理番号", "").strip()
+            out_name = DocumentFiller.pick_output_name(row, idx)
+            out_path = output_dir / f"{out_name}.docx"
+
+            # 현재 상태 계산
+            current_hash = cls.compute_row_hash(row)
+            image_path = cls._resolve_image(row, out_name, img_cache, data_cache)
+            current_img_sig = cls.compute_image_sig(image_path)
+
+            # manifest 조회
+            prev = manifest.get(mgmt_no, {})
+            unchanged = (
+                not force_all
+                and out_path.exists()
+                and prev.get("content_hash") == current_hash
+                and prev.get("image_sig") == current_img_sig
+            )
+
+            if unchanged:
+                skipped += 1
+                new_manifest[mgmt_no] = prev
+                if callback and idx % 50 == 0:
+                    callback(f"[{idx}/{total}] 스킵 {skipped}건 / 재생성 {regenerated}건")
+                continue
+
             try:
                 doc = Document(str(template_path))
                 nrow = DocumentFiller.row_norm_map(row)
                 DocumentFiller.replace_in_doc(doc, nrow)
-
-                out_name = DocumentFiller.pick_output_name(row, idx)
-                image_name = row.get("金型写真", "").strip()
-                image_path = None
-
-                # 1. XLSX의 金型写真(품명_도번)으로 시도
-                if image_name:
-                    image_path = img_cache.find(image_name)
-
-                # 2. 図番番号로 시도
-                if not image_path:
-                    drawing_no = DocumentFiller.value_by_aliases(
-                        nrow, ["図番番号", "drawing_no", "도번번호", "도번", "품번"])
-                    if drawing_no:
-                        image_path = img_cache.find(drawing_no)
-
-                # 2.5. 品名으로 시도 (도번 없는 경우)
-                if not image_path:
-                    product_name = DocumentFiller.value_by_aliases(
-                        nrow, ["品  名", "品 名", "product_name", "품명"])
-                    if product_name:
-                        image_path = img_cache.find(product_name.strip())
-
-                # 3. out_name(연번)으로 시도
-                if not image_path:
-                    image_path = img_cache.find(out_name)
-
-                # 4. output_dir/.data/ 검색 (신규 발행 첨부 이미지)
-                if not image_path:
-                    search_name = image_name or out_name
-                    image_path = data_cache.find(search_name)
-
                 DocumentFiller.insert_images_by_token(doc, image_path)
-                out_path = output_dir / f"{out_name}.docx"
                 doc.save(str(out_path))
 
-                if callback:
-                    callback(f"[{idx}/{total}] 갱신: {out_name}.docx")
+                if mgmt_no in manifest and mgmt_no != "_meta":
+                    regenerated += 1
+                    tag = "갱신"
+                else:
+                    created += 1
+                    tag = "신규"
 
-                mgmt_no = row.get("管理番号", "").strip()
                 if mgmt_no:
                     new_manifest[mgmt_no] = {
                         "file_name": out_name,
                         "serial": cls.extract_serial(out_name),
                         "品名": row.get("品 名", "").strip(),
                         "図番番号": row.get("図番番号", "").strip(),
+                        "content_hash": current_hash,
+                        "image_sig": current_img_sig,
                         "last_updated": datetime.now().isoformat(timespec="seconds"),
                     }
+
+                if callback:
+                    callback(f"[{idx}/{total}] {tag}: {out_name}.docx")
+
             except Exception as e:
                 if callback:
                     callback(f"[{idx}/{total}] 오류: {e}")
 
         cls.save_manifest(output_dir, new_manifest)
         if callback:
-            callback("✓ 동기화 완료 (manifest.json 저장됨)")
+            callback(f"✓ 동기화 완료 — 신규 {created} / 갱신 {regenerated} / 스킵 {skipped} (manifest.json 저장됨)")
 
 
 # ============================================================================

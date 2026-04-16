@@ -592,6 +592,12 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.sync_run_btn)
         vbox.addLayout(btn_row)
 
+        force_row = QHBoxLayout()
+        self.sync_force_chk = QCheckBox("강제 전체 재생성 (템플릿 교체 시 사용)")
+        force_row.addWidget(self.sync_force_chk)
+        force_row.addStretch()
+        vbox.addLayout(force_row)
+
         group.setLayout(vbox)
         layout.addWidget(group)
         widget.setLayout(layout)
@@ -961,11 +967,14 @@ class MainWindow(QMainWindow):
             return
         self.disable_buttons()
 
+        force_all = self.sync_force_chk.isChecked()
+
         def task():
             try:
                 DocxSyncManager.sync(
                     xlsx_file, template, output_dir, img_dir,
-                    callback=self._make_progress_cb())
+                    callback=self._make_progress_cb(),
+                    force_all=force_all)
                 self.signals.log.emit("✓ 동기화 완료")
             except _TaskCancelled:
                 self.signals.log.emit("⚠ 작업이 취소되었습니다.")
