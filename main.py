@@ -1356,7 +1356,8 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
         def task():
             try:
                 from src.pdf import docx_to_pdf
-                result = docx_to_pdf(input_path, output_path)
+                cb = self._make_progress_cb()
+                result = docx_to_pdf(input_path, output_path, callback=cb)
                 if result:
                     self.signals.log.emit(f"✓ PDF 변환 완료: {Path(result).name}")
                 else:
@@ -1379,7 +1380,8 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
         def task():
             try:
                 from src.pdf import batch_docx_to_pdf
-                results = batch_docx_to_pdf(input_dir, output_dir, recursive)
+                cb = self._make_progress_cb()
+                results = batch_docx_to_pdf(input_dir, output_dir, recursive, callback=cb)
                 self.signals.log.emit(f"✓ 일괄 변환 완료: {len(results)}개 → {output_dir}")
             except Exception as e:
                 self.signals.log.emit(f"✗ 오류: {e}")
@@ -1401,7 +1403,8 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
         def task():
             try:
                 from src.pdf import convert_and_merge
-                ok = convert_and_merge(docx_files, output_path)
+                cb = self._make_progress_cb()
+                ok = convert_and_merge(docx_files, output_path, callback=cb)
                 if ok:
                     self.signals.log.emit(f"✓ 변환·병합 완료: {output_path.name}")
                 else:
