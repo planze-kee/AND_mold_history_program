@@ -395,14 +395,15 @@ class HWPProcessor:
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
-        hwp_files = sorted(input_dir.glob("*.hwp"))
+        hwp_files = sorted(input_dir.rglob("*.hwp"))
         if not hwp_files:
             raise FileNotFoundError(f"No HWP files found in: {input_dir}")
 
         total = len(hwp_files)
 
-        # 파일 수가 적으면 단일 프로세스 (프로세스 생성 오버헤드 방지)
-        use_mp = total >= cls.MP_THRESHOLD
+        # EXE(frozen) 환경에서는 ProcessPoolExecutor가 crash를 일으키므로 비활성화
+        is_frozen = getattr(sys, "frozen", False)
+        use_mp = total >= cls.MP_THRESHOLD and not is_frozen
         if use_mp:
             cpu_count = multiprocessing.cpu_count()
             max_workers = workers if workers else max(1, min(cpu_count, total))
