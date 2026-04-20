@@ -2,11 +2,32 @@
 금형이력카드 처리 프로그램 - PyQt GUI
 """
 import html as _html
+import os
 import re
 import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
+
+# PyQt5 플랫폼 플러그인 경로 설정 (venv / EXE 양쪽 대응)
+# PyQt5 import 전에 실행해야 한다.
+if getattr(sys, 'frozen', False):
+    # PyInstaller EXE: _MEIPASS 기준 경로
+    _base = Path(sys._MEIPASS)
+    _plugin_path = _base / 'PyQt5' / 'Qt5' / 'plugins' / 'platforms'
+    if not _plugin_path.exists():
+        _plugin_path = _base / 'platforms'
+else:
+    # 일반 Python / venv: PyQt5 패키지 위치 기준
+    import importlib.util
+    _spec = importlib.util.find_spec('PyQt5')
+    if _spec and _spec.submodule_search_locations:
+        _plugin_path = Path(list(_spec.submodule_search_locations)[0]) / 'Qt5' / 'plugins' / 'platforms'
+    else:
+        _plugin_path = None
+
+if _plugin_path and _plugin_path.exists():
+    os.environ.setdefault('QT_QPA_PLATFORM_PLUGIN_PATH', str(_plugin_path))
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
