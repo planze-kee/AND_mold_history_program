@@ -1,6 +1,6 @@
 # 금형이력카드 처리 프로그램
 
-> **버전**: 2.3 &nbsp;|&nbsp; **최종 수정**: 2026-04-17 &nbsp;|&nbsp; **브랜치**: main
+> **버전**: 2.3 &nbsp;|&nbsp; **최종 수정**: 2026-04-20 &nbsp;|&nbsp; **브랜치**: main
 
 HWP 파일에서 데이터 및 이미지를 추출하고, XLSX 데이터를 기반으로 워드 문서를 자동 생성하는 통합 프로그램입니다.
 
@@ -137,6 +137,8 @@ trailing underscore/hyphen 자동 제거 후 재탐색 포함.
 - **HWP 변환 "No HWP files found" 오류**: `glob` → `rglob` 전환으로 서브폴더(`HWP 원본/`) 내 파일 탐색
 - **HWP 변환 "process pool terminated" 오류**: PyInstaller EXE 환경에서 `ProcessPoolExecutor` 자동 비활성화 (`sys.frozen` 감지)
 - **PDF 변환 작업 로그 미출력**: `src/pdf.py` 전체 `print()` → `callback()` 패턴 교체, 3개 모드 모두 실시간 로그 전달
+- **Qt 플랫폼 플러그인 오류** (`Could not find the Qt platform plugin "windows" in ""`): `main.py` 최상단에서 `QT_QPA_PLATFORM_PLUGIN_PATH` 자동 설정 (venv/EXE 양쪽 대응)
+- `data/input/DB_form.xlsx` → `data/templates/`로 이동
 
 ### v2.2 주요 수정 내용
 

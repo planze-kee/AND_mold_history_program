@@ -250,6 +250,24 @@
 
 ---
 
+## v2.3 — 버그 수정 및 안정화 (2026-04-20)
+
+### 버그 수정
+
+| 현상 | 원인 | 수정 |
+|------|------|------|
+| HWP 변환 "No HWP files found in: SAMCO이력카드" | `glob("*.hwp")`가 직접 하위만 탐색 — `HWP 원본/` 서브폴더 미탐색 | `rglob("*.hwp")`로 변경 |
+| HWP 변환 "process pool terminated abruptly" | PyInstaller EXE에서 `ProcessPoolExecutor` 실행 시 서브프로세스가 main 재실행 → crash | `sys.frozen` 감지 후 EXE 환경에서 멀티프로세싱 비활성화 |
+| PDF 변환 작업 로그 미출력 | `src/pdf.py` 전체가 `print()`만 사용 — GUI callback 미전달 | `_log(msg, callback)` 헬퍼 추가, 모든 함수에 `callback` 파라미터 추가. `main.py` 3개 task에서 `_make_progress_cb()` 전달 |
+| `Could not find the Qt platform plugin "windows" in ""` | venv/EXE 환경에서 `QT_QPA_PLATFORM_PLUGIN_PATH` 미설정 | `main.py` 최상단 PyQt5 import 전에 경로 자동 탐색·설정 (venv: `importlib.util`, EXE: `sys._MEIPASS`) |
+
+### 기타
+
+- `data/input/DB_form.xlsx` → `data/templates/`로 이동 (경로 일원화)
+- 불필요한 파일 정리: `dist/`, `build/`, 구버전 배포 ZIP/폴더, 완료된 작업 메모 MD
+
+---
+
 ## 버그 수정 이력
 
 | 날짜 | 현상 | 원인 | 수정 |
