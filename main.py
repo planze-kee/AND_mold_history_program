@@ -1323,6 +1323,10 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
         hbox.addWidget(btn)
         mg.addLayout(hbox)
 
+        self.pdf_merge_cleanup_chk = QCheckBox("개별 PDF 파일 저장 안 함 (병합본만 저장)")
+        self.pdf_merge_cleanup_chk.setChecked(True)
+        mg.addWidget(self.pdf_merge_cleanup_chk)
+
         self.pdf_merge_group.setLayout(mg)
         layout.addWidget(self.pdf_merge_group)
 
@@ -1421,11 +1425,13 @@ HWP 파일에 포함된 이미지를 추출하여 img/ 폴더에 저장합니다
         ]
         self.disable_buttons()
 
+        cleanup = self.pdf_merge_cleanup_chk.isChecked()
+
         def task():
             try:
                 from src.pdf import convert_and_merge
                 cb = self._make_progress_cb()
-                ok = convert_and_merge(docx_files, output_path, callback=cb)
+                ok = convert_and_merge(docx_files, output_path, callback=cb, cleanup=cleanup)
                 if ok:
                     self.signals.log.emit(f"✓ 변환·병합 완료: {output_path.name}")
                 else:

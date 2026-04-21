@@ -114,30 +114,76 @@ class DocxToPdfConverter:
             return None
 
     def convert_and_merge(self, docx_files: List[Path], output_path: Path,
-                          callback: Optional[Callable[[str], None]] = None) -> bool:
+                          callback: Optional[Callable[[str], None]] = None,
+                          cleanup: bool = False) -> bool:
+        """Word 파일들을 PDF로 변환하고 병합.
+
+        cleanup=True 시 각 DOCX를 임시 PDF로 변환 → 즉시 병합 → 임시 PDF 삭제.
+        개별 PDF 파일이 디스크에 남지 않는다.
+        """
         if not docx_files:
             _log("오류: 변환할 Word 파일이 없습니다.", callback)
+            return False
+
+        if not PYPDF_AVAILABLE and cleanup:
+            _log("✗ pypdf 가 설치되어 있지 않습니다. pip install pypdf", callback)
             return False
 
         output_path = Path(output_path).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         total = len(docx_files)
-        _log(f"Word 파일 {total}개를 PDF로 변환 중...", callback)
-        pdf_paths = []
 
-        for i, docx_file in enumerate(docx_files, 1):
-            _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
-            pdf_path = self.convert(docx_file, callback=callback)
-            if pdf_path:
-                pdf_paths.append(pdf_path)
+        if cleanup:
+            # 변환 즉시 병합 → 임시 PDF 삭제 (개별 파일 잔류 없음)
+            import tempfile
+            _log(f"Word 파일 {total}개를 PDF로 변환·병합 중 (개별 파일 미저장)...", callback)
+            writer = PdfWriter()
+            merged = 0
 
-        if not pdf_paths:
-            _log("✗ 변환된 PDF 파일이 없습니다.", callback)
-            return False
+            with tempfile.TemporaryDirectory() as tmpdir:
+                for i, docx_file in enumerate(docx_files, 1):
+                    _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
+                    tmp_pdf = Path(tmpdir) / (docx_file.stem + ".pdf")
+                    result = self.convert(docx_file, tmp_pdf, callback=callback)
+                    if result and Path(result).exists():
+                        reader = PdfReader(result)
+                        for page in reader.pages:
+                            writer.add_page(page)
+                        merged += 1
+                    # TemporaryDirectory 소멸 시 자동 삭제되므로 별도 삭제 불필요
 
-        _log(f"{len(pdf_paths)}개 PDF 파일을 병합 중...", callback)
-        return self._merge_pdfs(pdf_paths, output_path, callback)
+            if merged == 0:
+                _log("✗ 변환된 PDF 파일이 없습니다.", callback)
+                return False
+
+            try:
+                with open(output_path, "wb") as f:
+                    writer.write(f)
+                file_size = output_path.stat().st_size
+                _log(f"✓ 병합 완료: {output_path.name}  ({file_size / 1024:.1f} KB)", callback)
+                return True
+            except Exception as e:
+                _log(f"✗ PDF 저장 실패: {e}", callback)
+                return False
+
+        else:
+            # 기존 방식: 변환 후 일괄 병합 (개별 PDF 파일 유지)
+            _log(f"Word 파일 {total}개를 PDF로 변환 중...", callback)
+            pdf_paths = []
+
+            for i, docx_file in enumerate(docx_files, 1):
+                _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
+                pdf_path = self.convert(docx_file, callback=callback)
+                if pdf_path:
+                    pdf_paths.append(pdf_path)
+
+            if not pdf_paths:
+                _log("✗ 변환된 PDF 파일이 없습니다.", callback)
+                return False
+
+            _log(f"{len(pdf_paths)}개 PDF 파일을 병합 중...", callback)
+            return self._merge_pdfs(pdf_paths, output_path, callback)
 
     def _merge_pdfs(self, pdf_files: List[str], output_path: Path,
                     callback: Optional[Callable[[str], None]] = None) -> bool:
@@ -216,10 +262,13 @@ def docx_to_pdf(docx_path: Path, output_path: Optional[Path] = None,
 
 
 def convert_and_merge(docx_files: List[Path], output_path: Path,
-                      callback: Optional[Callable[[str], None]] = None) -> bool:
-    """Word 파일들을 PDF 로 변환 후 병합"""
+                      callback: Optional[Callable[[str], None]] = None,
+                      cleanup: bool = False) -> bool:
+    """Word 파일들을 PDF 로 변환 후 병합.
+    cleanup=True 시 개별 PDF를 디스크에 남기지 않는다.
+    """
     converter = DocxToPdfConverter()
-    return converter.convert_and_merge(docx_files, output_path, callback)
+    return converter.convert_and_merge(docx_files, output_path, callback, cleanup)
 
 
 def merge_pdfs(pdf_files: List[Path], output_path: Path,
