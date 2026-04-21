@@ -250,7 +250,7 @@
 
 ---
 
-## v2.3 — 버그 수정 및 안정화 (2026-04-20)
+## v2.3 — 버그 수정 및 기능 추가 (2026-04-20 ~ 2026-04-21)
 
 ### 버그 수정
 
@@ -260,6 +260,13 @@
 | HWP 변환 "process pool terminated abruptly" | PyInstaller EXE에서 `ProcessPoolExecutor` 실행 시 서브프로세스가 main 재실행 → crash | `sys.frozen` 감지 후 EXE 환경에서 멀티프로세싱 비활성화 |
 | PDF 변환 작업 로그 미출력 | `src/pdf.py` 전체가 `print()`만 사용 — GUI callback 미전달 | `_log(msg, callback)` 헬퍼 추가, 모든 함수에 `callback` 파라미터 추가. `main.py` 3개 task에서 `_make_progress_cb()` 전달 |
 | `Could not find the Qt platform plugin "windows" in ""` | venv/EXE 환경에서 `QT_QPA_PLATFORM_PLUGIN_PATH` 미설정 | `main.py` 최상단 PyQt5 import 전에 경로 자동 탐색·설정 (venv: `importlib.util`, EXE: `sys._MEIPASS`) |
+
+### 신규 기능 — PDF 병합 시 개별 파일 미저장 옵션 (2026-04-21)
+
+- **GUI**: "변환 후 병합" 모드에 **"개별 PDF 파일 저장 안 함 (병합본만 저장)"** 체크박스 추가 (기본값: 체크)
+- **`src/pdf.py`**: `convert_and_merge()`에 `cleanup: bool` 파라미터 추가
+  - `cleanup=True`: 각 DOCX를 `tempfile.TemporaryDirectory` 내 임시 PDF로 변환 → 즉시 `PdfWriter`에 페이지 추가 → 컨텍스트 종료 시 임시 PDF 자동 삭제. 디스크에 개별 PDF 잔류 없음
+  - `cleanup=False`: 기존 동작 유지 (개별 PDF를 원본 폴더에 저장)
 
 ### 기타
 
