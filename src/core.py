@@ -677,13 +677,30 @@ class ImageCache:
     # ------------------------------------------------------------------
     # 탐색
     # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize(stem: str) -> str:
+        """Excel 붙여넣기 등으로 섞인 공백/개행/확장자를 정규화한다.
+
+        - 모든 유니코드 공백(\\xa0, \\u3000, \\t, \\n 등)을 단일 공백으로 통일 후 strip
+        - 이미지 확장자가 실수로 포함된 경우 제거 (예: "파일명.png" → "파일명")
+        """
+        normalized = " ".join(stem.split())  # 모든 유니코드 공백 처리
+        p = Path(normalized)
+        if p.suffix.lower() in {e.lower() for e in DocumentConstants.IMAGE_EXTS}:
+            normalized = p.stem
+        return normalized
+
     def find(self, stem: str) -> Optional[Path]:
         """stem(확장자 없음)으로 이미지를 O(1)에 검색한다.
 
-        1. 정확한 stem 탐색
+        1. 정규화(공백/확장자) 후 정확한 stem 탐색
         2. sanitized stem 탐색
-        3. img_dir가 바뀐 경우를 위해 존재 여부 재확인
+        3. trailing underscore/dash 제거 후 재시도
         """
+        stem = self._normalize(stem)
+        if not stem:
+            return None
+
         # 1. 정확한 stem
         result = self._index.get(stem)
         if result and result.exists():
@@ -1053,7 +1070,7 @@ class DocumentFiller:
             image_path = None
 
             # 1. XLSX의 "金型写真"(품명_도번)으로 먼저 시도
-            image_name = row.get("金型写真", "").strip()
+            image_name = ImageCache._normalize(row.get("金型写真", ""))
             if image_name:
                 image_path = img_cache.find(image_name)
 
@@ -1067,7 +1084,7 @@ class DocumentFiller:
             if not image_path:
                 product_name = cls.value_by_aliases(nrow, ["品  名", "品 名", "product_name", "품명"])
                 if product_name:
-                    image_path = img_cache.find(product_name.strip())
+                    image_path = img_cache.find(product_name)
 
             # 3. 도번으로도 못 찾으면 out_name(연번)으로 시도
             if not image_path:
@@ -1217,7 +1234,7 @@ class DocxSyncManager:
     ) -> Optional[Path]:
         """행 데이터에서 이미지 경로를 탐색하는 헬퍼 (sync/단건 공통)"""
         nrow = DocumentFiller.row_norm_map(row)
-        image_name = row.get("金型写真", "").strip()
+        image_name = ImageCache._normalize(row.get("金型写真", ""))
         image_path = None
 
         # 1. XLSX의 金型写真(품명_도번)으로 시도
@@ -1236,7 +1253,7 @@ class DocxSyncManager:
             product_name = DocumentFiller.value_by_aliases(
                 nrow, ["品  名", "品 名", "product_name", "품명"])
             if product_name:
-                image_path = img_cache.find(product_name.strip())
+                image_path = img_cache.find(product_name)
 
         # 3. out_name(연번)으로 시도
         if not image_path:
