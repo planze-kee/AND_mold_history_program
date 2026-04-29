@@ -275,6 +275,33 @@
 
 ---
 
+## v2.4 — 이미지 탐색 안정화 (2026-04-29)
+
+### 버그 수정
+
+| 현상 | 원인 | 수정 |
+|------|------|------|
+| Excel 행 붙여넣기 후 워드 재생성 시 이미지 탐색 실패 | 붙여넣기 시 셀 값에 비표준 유니코드 공백(`\xa0`, 전각공백 등)·개행 혼입, 또는 확장자 포함(`파일명.png`) → `ImageCache.find()` 인덱스 미일치 | `ImageCache._normalize()` 추가, `find()` 진입 시·`金型写真` 컬럼 읽기 시 자동 적용 |
+
+### 구현 상세
+
+`src/core.py` — `ImageCache` 클래스
+
+```python
+@staticmethod
+def _normalize(stem: str) -> str:
+    normalized = " ".join(stem.split())   # 모든 유니코드 공백 → 단일 공백 후 strip
+    p = Path(normalized)
+    if p.suffix.lower() in {e.lower() for e in DocumentConstants.IMAGE_EXTS}:
+        normalized = p.stem               # 확장자 포함 시 제거
+    return normalized
+```
+
+- `find()`: 모든 입력에 `_normalize()` 선적용
+- `_resolve_image()` 2곳: `金型写真` 값을 `row.get(...).strip()` → `ImageCache._normalize(row.get(...))` 로 교체
+
+---
+
 ## 버그 수정 이력
 
 | 날짜 | 현상 | 원인 | 수정 |
