@@ -3,21 +3,22 @@ paths:
   hwp_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/00.DB-SAMCO.xlsx
   img_input: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/HWP 원본
   img_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test/SAMCO img
-  docx_xlsx: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/00.DB-SAMCO.xlsx
-  docx_template: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/data/templates/Word_양식_이력일자
+  docx_xlsx: C:/Users/UKY/Desktop/00.Work/09.Others/99.금형이력카드 프로그램/재승산업/00.DB_재승.xlsx
+  docx_template: C:/Users/UKY/Desktop/00.Work/09.Others/99.금형이력카드 프로그램/_internal/data/templates/Word_양식_이력일자
     제거본.docx
-  docx_img: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/img
-  docx_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test
+  docx_img: C:/Users/UKY/Desktop/00.Work/09.Others/99.금형이력카드 프로그램/재승산업/img
+  docx_output: C:/Users/UKY/Desktop/00.Work/09.Others/99.금형이력카드 프로그램/재승산업
   hist_xlsx: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/SAMCO이력카드/00.DB-SAMCO.xlsx
   hist_template: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/data/templates/Word_양식_이력일자
     제거본.docx
   hist_img: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test/SAMCO img
   hist_dir: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test
-  pdf_batch_input: data/output
-  pdf_batch_output: data/output_pdf
-  pdf_merge_output: C:/Users/UKY/Desktop/00.Work/09.Others/금형이력카드프로그램/test/merged.pdf
+  pdf_batch_input: C:/Users/UKY/Desktop/00.Work/09.Others/99.금형이력카드 프로그램/재승산업
+  pdf_batch_output: C:/Users/UKY/Desktop/00.Work/09.Others/99.금형이력카드 프로그램/예스/pdf
+  pdf_merge_output: C:/Users/UKY/Desktop/00.Work/09.Others/99.금형이력카드 프로그램/재승산업/01.PDF
+    출력파일 통합_(260429).pdf
 ui:
-  window_x: 1026
-  window_y: 268
+  window_x: 836
+  window_y: 293
   window_width: 560
-  window_height: 557
+  window_height: 565
