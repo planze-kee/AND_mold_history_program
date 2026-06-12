@@ -13,17 +13,15 @@ CONFIG_PATH = Path("config.yaml")
 
 DEFAULTS: dict = {
     "paths": {
+        # 공통 설정 (모든 탭이 공유)
+        "db_xlsx":          "data/output/output_from_hwp.xlsx",
+        "template":         "data/templates/Word_양식.docx",
+        "img_dir":          "img",
+        # 탭별 설정
         "hwp_input":        "YES",
         "hwp_output":       "data/output/output_from_hwp.xlsx",
         "img_input":        "YES",
-        "img_output":       "img",
-        "docx_xlsx":        "data/output/output_from_hwp.xlsx",
-        "docx_template":    "data/templates/Word_양식.docx",
-        "docx_img":         "img",
         "docx_output":      "data/output",
-        "hist_xlsx":        "data/output/00.DB_19-000.xlsx",
-        "hist_template":    "data/templates/Word_양식.docx",
-        "hist_img":         "img",
         "hist_dir":         "data/output",
         "pdf_batch_input":  "data/output",
         "pdf_batch_output": "data/output_pdf",
@@ -33,8 +31,15 @@ DEFAULTS: dict = {
         "window_x":      100,
         "window_y":      100,
         "window_width":  560,
-        "window_height": 520,
+        "window_height": 640,
     },
+}
+
+# 구 버전 config.yaml 경로 키 → 통합 키 매핑 (앞쪽 키 우선)
+LEGACY_PATH_MAP: dict = {
+    "db_xlsx":  ["docx_xlsx", "hist_xlsx"],
+    "template": ["docx_template", "hist_template"],
+    "img_dir":  ["docx_img", "hist_img", "img_output"],
 }
 
 
@@ -59,10 +64,33 @@ class Config:
             try:
                 with open(self._path, "r", encoding="utf-8") as f:
                     loaded = yaml.safe_load(f) or {}
+                loaded = self._migrate_legacy_paths(loaded)
                 return self._merge(DEFAULTS, loaded)
             except Exception as e:
                 logger.warning(f"config.yaml 로드 실패, 기본값 사용: {e}")
         return copy.deepcopy(DEFAULTS)
+
+    # ------------------------------------------------------------- migration
+    @staticmethod
+    def _migrate_legacy_paths(loaded: dict) -> dict:
+        """구 버전 경로 키(docx_xlsx/hist_xlsx 등)를 통합 키로 1회 변환.
+
+        통합 키가 이미 있으면 그대로 두고, 없으면 LEGACY_PATH_MAP의
+        앞쪽 구 키 값을 우선 복사한다. 구 키는 제거한다 (save 시 정리됨).
+        """
+        paths = loaded.get("paths")
+        if not isinstance(paths, dict):
+            return loaded
+        for new_key, old_keys in LEGACY_PATH_MAP.items():
+            if not paths.get(new_key):
+                for old in old_keys:
+                    if paths.get(old):
+                        paths[new_key] = paths[old]
+                        break
+        for old_keys in LEGACY_PATH_MAP.values():
+            for old in old_keys:
+                paths.pop(old, None)
+        return loaded
 
     # ------------------------------------------------------------------ merge
     @staticmethod

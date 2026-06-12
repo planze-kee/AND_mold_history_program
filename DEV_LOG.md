@@ -302,6 +302,57 @@ def _normalize(stem: str) -> str:
 
 ---
 
+## v2.5 — 다크테마 전환 + UX/워크플로 개선 (2026-06-12)
+
+**설계 문서**: `C:\Users\UKY\.claude\plans\mold-history-frolicking-wave.md` (Plan 모드)
+
+### UI — 다크테마 전면 전환 (`src/theme.py` 신규)
+
+| 항목 | 내용 |
+|------|------|
+| 다크 팔레트 + 전역 QSS | `src/theme.py` 신규 — 색상 상수(`BG_*`, `TEXT*`, `ACCENT`, `SUCCESS/ERROR/WARNING`) + `DARK_QSS` 하나로 전 위젯 스타일 통일 |
+| 인라인 스타일 제거 | 버튼마다 제각각이던 `setStyleSheet` 색상(보라/주황/분홍/회청 등) 전부 제거 → `class="primary"`(액센트 파랑) / `class="danger"`(취소) property 2종으로 정리 |
+| 로그 색상 다크 대응 | 성공 청록(`#4ec9b0`) / 오류 연빨강(`#f48771`) / 경고 연노랑(`#dcdcaa`) / 타임스탬프 dim |
+| 타이틀바 다크화 | `apply_dark_titlebar()` — `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` (메인 창 + 신규 발행 다이얼로그) |
+| High-DPI | `AA_EnableHighDpiScaling` + `AA_UseHighDpiPixmaps` 적용, 최소 창 크기 560×560 |
+
+### 워크플로 — 탭 재배열 + 공통 설정 통합 (`main.py`)
+
+| 항목 | 내용 |
+|------|------|
+| 탭 순서 = 작업 순서 | `1. HWP→엑셀 / 2. 이미지 추출 / 3. 문서 생성 / 4. 이력 관리 / 5. PDF` — 탭 라벨·내부 타이틀·도움말의 단계 번호 일치 |
+| Ctrl+R 안정화 | 하드코딩 탭 인덱스 제거 → `{탭 위젯: 실행 함수}` 매핑(`_tab_actions`) 기반 조회 |
+| 공통 설정 영역 신설 | DB 엑셀 / Word 템플릿 / 이미지 폴더를 탭 위 공통 그룹에서 1회 설정 → 문서 생성·이력 관리·신규 발행·이미지 추출이 공유 (탭별 중복 입력란 제거) |
+| config 키 통합 | `docx_xlsx`+`hist_xlsx` → `db_xlsx`, `docx_template`+`hist_template` → `template`, `docx_img`+`hist_img`+`img_output` → `img_dir`. 구 config.yaml은 로드 시 자동 마이그레이션 (`Config._migrate_legacy_paths`, docx_* 값 우선) |
+
+### UX 세부 개선
+
+| 항목 | 내용 |
+|------|------|
+| 드래그&드롭 | `PathLineEdit` 클래스 신규 (file/dir 모드) — 모든 경로 입력란에 탐색기 드롭 지원, 드롭 가능 시 점선 테두리 표시 |
+| 폴더 열기 버튼 | 작업 완료 후 로그 헤더의 "폴더 열기"로 마지막 출력 폴더를 탐색기로 즉시 열기 (`_last_output_dir` 추적) |
+| 신규 발행 다이얼로그 | XLSX 경로 keystroke마다 워크북 전체 로드하던 문제 → 500ms 디바운스. 사용자가 직접 수정한 File name을 자동값으로 덮어쓰지 않음 (`textEdited` 플래그 + "↺ 자동값" 복원 버튼) |
+| 이력 관리 탭 | 파일 목록 검색란 추가(부분일치 필터), 폴더 입력 디바운스(500ms), 파일 수 표시를 `_history` 필터링 후 개수로 정정, 시작 시 목록 자동 로드 |
+| 종료 보호 | Worker 실행 중 창 닫기 시 확인 다이얼로그 → 취소 플래그 + `worker.wait()` 후 종료 |
+
+### 버그 수정
+
+| 현상 | 원인 | 수정 |
+|------|------|------|
+| PDF 변환 시 사용자가 열어둔 Word 문서까지 전부 강제 종료 | `src/pdf.py`의 `taskkill /F /IM WINWORD.EXE`가 변환마다 실행 | taskkill 제거 — 코드가 생성한 COM 인스턴스만 `Quit()` |
+| 일괄 PDF 변환이 파일 수에 비례해 느림 | 파일마다 Word COM 인스턴스 생성/종료 반복 | `word_session()` 컨텍스트 추가 — 일괄 변환/병합 시 인스턴스 1회 생성 후 재사용 |
+
+### 검증
+
+- `test/test_core.py` 65개 전부 통과 (core 로직 회귀 없음)
+- 앱 구동 + 탭별 스크린샷으로 다크테마/탭 구조/다이얼로그/로그 색상 확인
+- config.yaml 마이그레이션을 임시 사본으로 검증 (구 키 제거·신 키 생성 확인)
+
+> **주의**: 기존 config.yaml에서 `docx_*`(재승산업)와 `hist_*`(SAMCO) 경로가 달랐으므로,
+> 통합 후 공통 설정에는 **docx_* 값(재승산업)이 우선 적용**됨. SAMCO 작업 시 공통 설정에서 경로 변경 필요.
+
+---
+
 ## 버그 수정 이력
 
 | 날짜 | 현상 | 원인 | 수정 |

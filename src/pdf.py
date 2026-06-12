@@ -4,9 +4,9 @@
 Word (.docx) 파일을 PDF 로 변환하고, 여러 PDF 파일을 하나로 병합합니다.
 """
 
-import os
 import sys
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -29,6 +29,49 @@ class DocxToPdfConverter:
 
     def __init__(self):
         self.pdf_files: List[str] = []
+        self._word = None  # word_session() 동안 재사용하는 Word COM 인스턴스
+
+    @staticmethod
+    def _create_word():
+        """Word COM 인스턴스 생성 (호출 스레드의 COM 초기화 포함)"""
+        import comtypes
+        import comtypes.client
+
+        try:
+            comtypes.CoInitialize()
+        except OSError:
+            pass  # 이미 초기화된 스레드
+
+        word = comtypes.client.CreateObject("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        return word
+
+    @contextmanager
+    def word_session(self):
+        """여러 파일 변환 시 Word 인스턴스를 1회만 생성/종료하는 컨텍스트.
+
+        세션 진입에 실패하면 convert()가 파일마다 개별 생성으로 폴백한다.
+        """
+        if sys.platform != 'win32' or self._word is not None:
+            yield
+            return
+
+        try:
+            self._word = self._create_word()
+        except Exception:
+            self._word = None
+            yield
+            return
+
+        try:
+            yield
+        finally:
+            try:
+                self._word.Quit()
+            except Exception:
+                pass
+            self._word = None
 
     def convert(self, docx_path: Path, output_path: Optional[Path] = None,
                 callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
@@ -51,13 +94,12 @@ class DocxToPdfConverter:
 
     def _convert_windows(self, docx_path: Path, pdf_path: Path,
                          callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
-        import traceback
         try:
-            import comtypes.client
-
-            word = comtypes.client.CreateObject("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = 0
+            # word_session() 안이면 세션 인스턴스 재사용, 아니면 개별 생성/종료
+            word = self._word
+            own_instance = word is None
+            if own_instance:
+                word = self._create_word()
 
             try:
                 doc = word.Documents.Open(str(docx_path), ReadOnly=True)
@@ -69,11 +111,13 @@ class DocxToPdfConverter:
                 _log(f"✗ 변환 오류: {docx_path.name} — {convert_error}", callback)
                 return None
             finally:
-                try:
-                    word.Quit()
-                except Exception:
-                    pass
-                os.system("taskkill /F /IM WINWORD.EXE >nul 2>&1")
+                # 이 코드가 생성한 인스턴스만 종료한다.
+                # 사용자가 열어둔 Word는 건드리지 않는다.
+                if own_instance:
+                    try:
+                        word.Quit()
+                    except Exception:
+                        pass
 
         except ImportError as e:
             _log(f"✗ comtypes/pywin32 설치 필요: {e}", callback)
@@ -141,7 +185,7 @@ class DocxToPdfConverter:
             writer = PdfWriter()
             merged = 0
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory() as tmpdir, self.word_session():
                 for i, docx_file in enumerate(docx_files, 1):
                     _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
                     tmp_pdf = Path(tmpdir) / (docx_file.stem + ".pdf")
@@ -172,11 +216,12 @@ class DocxToPdfConverter:
             _log(f"Word 파일 {total}개를 PDF로 변환 중...", callback)
             pdf_paths = []
 
-            for i, docx_file in enumerate(docx_files, 1):
-                _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
-                pdf_path = self.convert(docx_file, callback=callback)
-                if pdf_path:
-                    pdf_paths.append(pdf_path)
+            with self.word_session():
+                for i, docx_file in enumerate(docx_files, 1):
+                    _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
+                    pdf_path = self.convert(docx_file, callback=callback)
+                    if pdf_path:
+                        pdf_paths.append(pdf_path)
 
             if not pdf_paths:
                 _log("✗ 변환된 PDF 파일이 없습니다.", callback)
@@ -297,12 +342,13 @@ def batch_docx_to_pdf(input_dir: Path, output_dir: Optional[Path] = None,
     pdf_paths = []
     converter = DocxToPdfConverter()
 
-    for i, docx_file in enumerate(docx_files, 1):
-        _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
-        pdf_path = output_dir / docx_file.with_suffix('.pdf').name
-        pdf_path_str = converter.convert(docx_file, pdf_path, callback)
-        if pdf_path_str:
-            pdf_paths.append(pdf_path_str)
+    with converter.word_session():
+        for i, docx_file in enumerate(docx_files, 1):
+            _log(f"[{i}/{total}] 변환 중: {docx_file.name}", callback)
+            pdf_path = output_dir / docx_file.with_suffix('.pdf').name
+            pdf_path_str = converter.convert(docx_file, pdf_path, callback)
+            if pdf_path_str:
+                pdf_paths.append(pdf_path_str)
 
     _log(f"✓ 총 {len(pdf_paths)}개 파일 변환 완료", callback)
     return pdf_paths
